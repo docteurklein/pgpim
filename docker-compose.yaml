@@ -1,0 +1,58 @@
+services:
+  redpanda:
+    image: docker.vectorized.io/vectorized/redpanda:v21.11.3
+    command:
+      - redpanda start
+      - --overprovisioned
+      - --smp 1
+      - --memory 1G
+      - --reserve-memory 0M
+      - --node-id 0
+      - --check=false
+      - --kafka-addr 0.0.0.0:9092
+      - --advertise-kafka-addr redpanda:9092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr redpanda:8082
+      - --set redpanda.enable_transactions=true
+      - --set redpanda.enable_idempotence=true
+      - --set redpanda.auto_create_topics_enabled=true
+    ports:
+      - '0:9092'
+      - '0:8081'
+      - '0:8082'
+    healthcheck: { test: curl -f localhost:9644/v1/status/ready, interval: 1s, start_period: 30s }
+
+  mysql:
+    image: mysql
+    command: '--log-bin --binlog-format=row --binlog-row-image=full'
+    ports:
+      - '0:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: debezium
+      MYSQL_PASSWORD: debezium
+
+  debezium-connect:
+    image: debezium/connect
+    depends_on:
+      redpanda: { condition: service_healthy }
+    ports:
+      - '0:8083'
+    environment:
+      BOOTSTRAP_SERVERS: "redpanda:9092"
+      GROUP_ID: "1"
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://redpanda:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://redpanda:8081
+    volumes:
+      - $HOME/Downloads/confluentinc-kafka-connect-jdbc-10.4.1/lib/:/kafka/connect/debezium-connector-jdbc
+
+  postgres:
+    image: postgres
+    ports:
+      - '0:5432'
+    environment:
+      POSTGRES_PASSWORD: postgres
