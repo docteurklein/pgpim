@@ -23,7 +23,6 @@ alter table family enable row level security;
 
 create policy family_by_tenant
 on family
--- as restrictive
 to app
 using (tenant = current_setting('app.tenant', true));
 
@@ -47,7 +46,6 @@ alter table category enable row level security;
 
 create policy category_by_tenant
 on category
--- as restrictive
 to app
 using (tenant = current_setting('app.tenant', true));
 
@@ -70,7 +68,6 @@ alter table attribute enable row level security;
 
 create policy attribute_by_tenant
 on attribute
--- as restrictive
 to app
 using (tenant = current_setting('app.tenant', true));
 
@@ -86,32 +83,25 @@ alter table family_has_attribute enable row level security;
 
 create policy family_has_attribute_by_tenant
 on family_has_attribute
--- as permissive
 for all
 to app
 using (tenant = current_setting('app.tenant', true));
 
 create function debug(inout anyelement) as $$ begin raise notice '%', $1; end $$ language plpgsql strict stable;
 
-create function family_has_no_parent_attribute(family_ netext, attribute_ netext) returns boolean
-as $$
-select not exists(
-    select from family_has_attribute fha
-    join family_ancestry f using (tenant)
-    where family_ = f.family
-    and fha.family = any(f.ancestors)
-    and fha.attribute = attribute_
-)
-$$ language sql strict volatile;
-
-
 create policy family_has_no_parent_attribute
 on family_has_attribute
-as restrictive -- why can't I? there is a permissive one above - EDIT: ah! maybe because "for insert" and not "for all"
+as restrictive
 for insert
 to app
 with check (
-    debug(family_has_no_parent_attribute(family, attribute))
+    not exists(
+        select from family_has_attribute ancestor
+        join family_ancestry f using (tenant)
+        where family_has_attribute.family = f.family
+        and ancestor.family = any(f.ancestors)
+        and ancestor.attribute = family_has_attribute.attribute
+    )
 );
 
 create table product (
@@ -127,7 +117,6 @@ alter table product enable row level security;
 
 create policy product_by_tenant
 on product
--- as restrictive
 to app
 using (tenant = current_setting('app.tenant', true));
 
@@ -143,7 +132,6 @@ alter table product_in_category enable row level security;
 
 create policy product_in_category_by_tenant
 on product_in_category
--- as restrictive
 to app
 using (tenant = current_setting('app.tenant', true));
 
@@ -155,7 +143,7 @@ create table product_value (
     channel netext null,
     language netext null,
     value jsonb null,
-    -- primary key (tenant, product, attribute, locale, channel),
+    -- primary key (tenant, product, attribute, locale, channel), -- can't do, forces not null :/
     unique nulls not distinct (tenant, product, attribute, locale, channel),
     foreign key (tenant, product) references product (tenant, product) on delete cascade,
     foreign key (tenant, attribute) references attribute (tenant, attribute) on delete cascade
@@ -164,7 +152,6 @@ alter table product_value enable row level security;
 
 create policy product_value_by_tenant
 on product_value
--- as restrictive
 to app
 using (tenant = current_setting('app.tenant', true));
 
@@ -195,6 +182,13 @@ from product_ancestry
 join product_value value using (tenant)
 where value.product = any(path)
 ;
+
+create table sentence (
+    language text not null default 'english',
+    sentence text not null
+);
+\copy sentence(sentence) from 'sentences.sql' with (format text);
+
 
 grant all on all tables in schema shca to app;
 

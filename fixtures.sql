@@ -11,6 +11,10 @@ select array_to_string(
 , ' ') from words;
 $$ language sql volatile;
 
+create or replace function sentence() returns text as $$
+    select sentence from sentence tablesample bernoulli(20) limit 1
+$$ language sql volatile;
+
 set local role app;
 -- select set_config('app.tenant', 'tenant#1', true);
 
@@ -32,11 +36,6 @@ from generate_series(1, 5) i;
 insert into attribute (tenant, attribute, type)
 select current_setting('app.tenant', true), 'parent attribute#' || i, 'text'
 from generate_series(1, 5) i;
-
-commit;
-begin;
-set local search_path to shca;
--- select set_config('app.tenant', 'tenant#1', true);
 
 -- truncate family_has_attribute cascade;
 insert into family_has_attribute (tenant, family, attribute)
@@ -71,7 +70,7 @@ join family family_child on family_child.parent = family.family
 
 -- truncate product_value cascade;
 insert into product_value (tenant, product, attribute, locale, channel, language, value)
-select current_setting('app.tenant', true), product, attribute, locale, channel, 'simple', to_jsonb(lorem())
+select current_setting('app.tenant', true), product, attribute, locale, channel, 'simple', to_jsonb(sentence())
 from (values ('en_EN'), ('de_DE')) locale (locale),
 (values ('ecommerce'), ('print')) channel (channel),
 product
@@ -84,7 +83,7 @@ and attribute not like 'parent attr%';
 ;
 
 insert into product_value (tenant, product, attribute, locale, channel, language, value)
-select current_setting('app.tenant', true), product, attribute, null, null, 'simple', to_jsonb('parent data: ' || lorem())
+select current_setting('app.tenant', true), product, attribute, null, null, 'simple', to_jsonb('parent data: ' || sentence())
 from product
 join family_has_attribute using (tenant, family)
 join family using (tenant, family)
