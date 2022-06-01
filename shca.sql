@@ -1,3 +1,5 @@
+\set ON_ERROR_STOP on
+
 begin;
 
 drop schema if exists shca cascade;
@@ -8,10 +10,12 @@ drop role if exists app;
 create role app;
 grant usage on schema shca to app;
 
+create domain netext as text constraint "non-empty text" check (value <> '');
+
 create table family (
-     tenant text not null,
-     family text not null,
-     parent text null,
+     tenant netext not null,
+     family netext not null,
+     parent netext null,
      primary key (tenant, family),
      foreign key (tenant, parent) references family (tenant, family) on delete cascade deferrable
 );
@@ -33,9 +37,9 @@ from family_ancestry parent
 join family child on child.parent = parent.family;
 
 create table category (
-     tenant text not null,
-     category text not null,
-     parent text null,
+     tenant netext not null,
+     category netext not null,
+     parent netext null,
      primary key (tenant, category),
      foreign key (tenant, parent) references category (tenant, category) on delete cascade deferrable
 );
@@ -57,9 +61,9 @@ from category_ancestry parent
 join category child on child.parent = parent.category;
 
 create table attribute (
-    tenant text not null,
-    attribute text not null,
-    type text not null,
+    tenant netext not null,
+    attribute netext not null,
+    type netext not null,
     primary key (tenant, attribute)
 );
 alter table attribute enable row level security;
@@ -71,9 +75,9 @@ to app
 using (tenant = current_setting('app.tenant', true));
 
 create table family_has_attribute (
-     tenant text not null,
-     family text not null,
-     attribute text not null,
+     tenant netext not null,
+     family netext not null,
+     attribute netext not null,
      primary key (tenant, family, attribute),
      foreign key (tenant, family) references family (tenant, family) on delete cascade,
      foreign key (tenant, attribute) references attribute (tenant, attribute) on delete cascade
@@ -87,7 +91,7 @@ for all
 to app
 using (tenant = current_setting('app.tenant', true));
 
-create function debug_me(fha text) returns boolean
+create function debug_me(fha netext) returns boolean
 as $$
 begin
 	raise notice '%', fha;
@@ -95,7 +99,7 @@ begin
 end;
 $$ language 'plpgsql';
 
-create function family_has_attribute_is_valid(_attribute text, _family text) returns boolean
+create function family_has_attribute_is_valid(_attribute netext, _family netext) returns boolean
 as $$
 select not exists(
     select from family_has_attribute fha
@@ -113,10 +117,10 @@ to app
 with check (family_has_attribute_is_valid(attribute, family));
 
 create table product (
-    tenant text not null,
-    product text not null,
-    parent text null,
-    family text not null,
+    tenant netext not null,
+    product netext not null,
+    parent netext null,
+    family netext not null,
     primary key (tenant, product),
     foreign key (tenant, family) references family (tenant, family) on delete cascade,
     foreign key (tenant, parent) references product (tenant, product) on delete cascade deferrable
@@ -130,9 +134,9 @@ to app
 using (tenant = current_setting('app.tenant', true));
 
 create table product_in_category (
-     tenant text not null,
-     product text not null,
-     category text not null,
+     tenant netext not null,
+     product netext not null,
+     category netext not null,
      primary key (tenant, product, category),
      foreign key (tenant, product) references product (tenant, product) on delete cascade,
      foreign key (tenant, category) references category (tenant, category) on delete cascade
@@ -146,14 +150,14 @@ to app
 using (tenant = current_setting('app.tenant', true));
 
 create table product_value (
-    tenant text not null,
-    product text not null,
-    attribute text not null,
-    locale text not null default '__all__', -- hack for nullable composite pkey. consider `__all__` to be NULL here, and must exist in ref table if used as fkey.
-    channel text not null default '__all__', -- also, it means 2 values can coexist on the same attribute ("__all__" and a custom one). coalesce by hand if necessary.
-    language text null,
+    tenant netext not null,
+    product netext not null,
+    attribute netext not null,
+    locale netext null,
+    channel netext null,
+    language netext null,
     value jsonb null,
-    primary key (tenant, product, attribute, locale, channel),
+    -- primary key (tenant, product, attribute, locale, channel),
     unique nulls not distinct (tenant, product, attribute, locale, channel),
     foreign key (tenant, product) references product (tenant, product) on delete cascade,
     foreign key (tenant, attribute) references attribute (tenant, attribute) on delete cascade
@@ -166,7 +170,7 @@ on product_value
 to app
 using (tenant = current_setting('app.tenant', true));
 
-create function localized_tsvector(language text, value jsonb) returns tsvector
+create function localized_tsvector(language netext, value jsonb) returns tsvector
 as $$ select to_tsvector(language::regconfig, value); $$ -- wrapped because it fails as not immutable. why?
 language sql strict immutable;
 
@@ -176,20 +180,23 @@ using gin
 (localized_tsvector(language, value))
 where jsonb_typeof(value) = 'string';
 
-create view inherited_product_value (product, parent, family, attribute, locale, channel, value) as
-with recursive product_ancestry (product, parent, family, path, level) as (
-    select product, parent, family, array[product], 1
+create view inherited_product_value (tenant, product, attribute, locale, channel, language, value, path) as
+with recursive product_ancestry (tenant, product, parent, path) as (
+    select tenant, product, parent, array[product]
     from product
+    where parent is null
     union all
-    select child.product, parent.product, parent.family, path || child.product, level + 1
-    from product_ancestry child
-    join product parent on child.product = parent.product
-    where not child.product = any(path)
-) -- search breadth first by tenant, product set ordercol
-select product, parent, family, attribute, locale, channel, value
+    select child.tenant, child.product, child.parent, path || child.product
+    from product_ancestry parent
+    join product child on child.parent = parent.product
+)
+-- cycle tenant, product set is_cycle using path
+-- search depth first by tenant, product set ordercol
+select tenant, value.product, attribute, locale, channel, language, value, path
 from product_ancestry
-join product_value value using (product)
-order by level desc;
+join product_value value using (tenant)
+where value.product = any(path)
+;
 
 grant all on all tables in schema shca to app;
 
