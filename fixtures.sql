@@ -14,17 +14,17 @@ $$ language sql volatile;
 set local role app;
 -- select set_config('app.tenant', 'tenant#1', true);
 
-truncate family cascade;
+-- truncate family cascade;
 insert into family (tenant, family, parent)
 with recursive tree(family, parent, level) as (
     select 'family#' || i, null, 1 from generate_series(1, 5) i
     union all
     select format('%s.%s', tree.family, j), tree.family, level + 1 from generate_series(1, 3) j, tree
-    where level < 3
+    where level < 2
 )
 select current_setting('app.tenant', true), family, parent from tree;
 
-truncate attribute cascade;
+-- truncate attribute cascade;
 insert into attribute (tenant, attribute, type)
 select current_setting('app.tenant', true), 'attribute#' || i, 'text'
 from generate_series(1, 5) i;
@@ -38,7 +38,7 @@ begin;
 set local search_path to shca;
 -- select set_config('app.tenant', 'tenant#1', true);
 
-truncate family_has_attribute cascade;
+-- truncate family_has_attribute cascade;
 insert into family_has_attribute (tenant, family, attribute)
 select tenant, family, attribute
 from family
@@ -54,7 +54,7 @@ join attribute using (tenant)
 where parent is null
 and attribute like 'parent attr%';
 
-truncate product cascade;
+-- truncate product cascade;
 insert into product (tenant, product, parent, family)
 select current_setting('app.tenant', true), format('product#%s of %s', i, family), null, family
 from generate_series(1, 3) i,
@@ -69,7 +69,7 @@ join family family_child on family_child.parent = family.family
 -- where family.parent is not null;
 ;
 
-truncate product_value cascade;
+-- truncate product_value cascade;
 insert into product_value (tenant, product, attribute, locale, channel, language, value)
 select current_setting('app.tenant', true), product, attribute, locale, channel, 'simple', to_jsonb(lorem())
 from (values ('en_EN'), ('de_DE')) locale (locale),

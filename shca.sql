@@ -27,14 +27,14 @@ on family
 to app
 using (tenant = current_setting('app.tenant', true));
 
-create recursive view family_ancestry (family, parent, level, ancestors) as
-select family, parent, 1, '{}'::text[]
+create recursive view family_ancestry (tenant, family, parent, level, ancestors) with (security_invoker) as
+select tenant, family, parent, 1, '{}'::text[]
 from family
 where parent is null
 union all
-select child.family, child.parent, level + 1, ancestors || parent.family
+select child.tenant, child.family, child.parent, level + 1, ancestors || parent.family
 from family_ancestry parent
-join family child on child.parent = parent.family;
+join family child on (child.tenant, child.parent) = (parent.tenant, parent.family);
 
 create table category (
      tenant netext not null,
@@ -51,7 +51,7 @@ on category
 to app
 using (tenant = current_setting('app.tenant', true));
 
-create recursive view category_ancestry (category, level, ancestors) as
+create recursive view category_ancestry (category, level, ancestors) with (security_invoker) as
 select category, 1, '{}'::text[]
 from category
 where parent is null
@@ -85,36 +85,34 @@ create table family_has_attribute (
 alter table family_has_attribute enable row level security;
 
 create policy family_has_attribute_by_tenant
-on attribute
+on family_has_attribute
 -- as permissive
 for all
 to app
 using (tenant = current_setting('app.tenant', true));
 
-create function debug_me(fha netext) returns boolean
-as $$
-begin
-	raise notice '%', fha;
-	return true;
-end;
-$$ language 'plpgsql';
+create function debug(inout anyelement) as $$ begin raise notice '%', $1; end $$ language plpgsql strict stable;
 
-create function family_has_attribute_is_valid(_attribute netext, _family netext) returns boolean
+create function family_has_no_parent_attribute(family_ netext, attribute_ netext) returns boolean
 as $$
 select not exists(
     select from family_has_attribute fha
-    join family_ancestry f using (family)
-    where f.family = _family
-    and fha.attribute = _attribute
+    join family_ancestry f using (tenant)
+    where family_ = f.family
+    and fha.family = any(f.ancestors)
+    and fha.attribute = attribute_
 )
 $$ language sql strict volatile;
 
+
 create policy family_has_no_parent_attribute
 on family_has_attribute
--- as restrictive -- why can't I? there is a permissive one above
+as restrictive -- why can't I? there is a permissive one above - EDIT: ah! maybe because "for insert" and not "for all"
 for insert
 to app
-with check (family_has_attribute_is_valid(attribute, family));
+with check (
+    debug(family_has_no_parent_attribute(family, attribute))
+);
 
 create table product (
     tenant netext not null,
@@ -180,7 +178,7 @@ using gin
 (localized_tsvector(language, value))
 where jsonb_typeof(value) = 'string';
 
-create view inherited_product_value (tenant, product, attribute, locale, channel, language, value, path) as
+create view inherited_product_value (tenant, product, attribute, locale, channel, language, value, path) with (security_invoker) as
 with recursive product_ancestry (tenant, product, parent, path) as (
     select tenant, product, parent, array[product]
     from product
