@@ -3,6 +3,8 @@ dcu
 dce -T mysql mysql -uroot -proot <<< 'create database pim_1'
 dce -T mysql mysql -uroot -proot pim_1 < sql/mysql.sql
 
+psql -h 0 -U postgres -c "select set_config('app.tenant', 'tenant#1', false)" -c 'select setseed(0.1)' -a -f src/schema.sql -f fixtures.sql
+
 curl --request POST --url 0:8083/connectors --header 'Content-Type: application/json' --data @- << EOF
 {
   "name": "$pim_name-source",

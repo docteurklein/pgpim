@@ -23,7 +23,7 @@ alter table sentence alter language set default 'french';
 grant select on sentence to app;
 
 create or replace function sentence() returns text as $$
-    select sentence from sentence tablesample bernoulli(20) limit 1
+    select sentence from sentence tablesample bernoulli(1) limit 1
 $$ language sql volatile;
 
 set local role app;
@@ -35,7 +35,7 @@ with recursive tree(family, parent, level) as (
     select 'family#' || i, null, 1 from generate_series(1, 5) i
     union all
     select format('%s.%s', tree.family, j), tree.family, level + 1 from generate_series(1, 3) j, tree
-    where level < 2
+    where level < 3
 )
 select family, parent from tree;
 
@@ -51,15 +51,13 @@ from generate_series(1, 5) i;
 -- truncate family_has_attribute cascade;
 insert into family_has_attribute (family, attribute)
 select family, attribute
-from family
-join attribute using (tenant)
+from family, attribute
 where parent is not null
 and attribute not like 'parent attr%';
 
 insert into family_has_attribute (family, attribute)
 select family, attribute
-from family
-join attribute using (tenant)
+from family, attribute
 where parent is null
 and attribute like 'parent attr%';
 
@@ -73,35 +71,32 @@ where family.parent is null;
 insert into product (product, parent, family)
 select format('child %s of %s', random(), product), product, family_child.family
 from product
-join family using(tenant, family)
+join family using(family)
 join family family_child on family_child.parent = family.family
 -- where family.parent is not null;
 ;
 
 -- truncate product_value cascade;
 insert into product_value (product, attribute, locale, channel, language, value)
-select product, attribute, locale, channel, language::regconfig, to_jsonb(sentence)
+select product, attribute, locale, channel, 'simple'::regconfig, to_jsonb(sentence())
 from (values ('en_EN'), ('de_DE')) locale (locale),
 (values ('ecommerce'), ('print')) channel (channel),
-sentence tablesample bernoulli(1),
 product
-join family_has_attribute using (tenant, family)
-join family using (tenant, family)
-join attribute using (tenant, attribute)
+join family_has_attribute using (family)
+join family using (family)
+join attribute using (attribute)
 where product.parent is not null
 and family.parent is not null
-and attribute not like 'parent attr%';
 ;
 
 insert into product_value (product, attribute, locale, channel, language, value)
-select product, attribute, null, null, language::regconfig, to_jsonb('parent data: ' || sentence)
-from sentence tablesample bernoulli(1),
-product
-join family_has_attribute using (tenant, family)
-join family using (tenant, family)
-join attribute using (tenant, attribute)
+select product, attribute, null, null, 'simple'::regconfig, to_jsonb('parent data: ' || sentence())
+from product
+join family_has_attribute using (family)
+join family using (family)
+join attribute using (attribute)
 where product.parent is null
 and family.parent is null
-and attribute like 'parent attr%';
+;
 
 commit;

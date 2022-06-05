@@ -35,6 +35,15 @@ select child.tenant, child.family, child.parent, level + 1, ancestors || parent.
 from family_ancestry parent
 join family child on child.parent = parent.family;
 
+create view family_with_relatives as
+select fa.*, coalesce(
+    array_agg(descendant.family) filter (where descendant.family is not null),
+    '{}'
+) descendants
+from family_ancestry fa
+left join family_ancestry descendant on fa.family = any(descendant.ancestors)
+group by 1, 2, 3, 4, 5;
+
 create table category (
     tenant netext not null default current_setting('app.tenant', true),
     category netext not null,
@@ -50,7 +59,7 @@ to app
 using (tenant = current_setting('app.tenant', true));
 
 create recursive view category_ancestry (tenant, category, level, ancestors) with (security_invoker) as
-select tenant, category, 1, '{}'::text[]
+select tenant, category, 1, '{}'
 from category
 where parent is null
 union all
@@ -87,23 +96,26 @@ for all
 to app
 using (tenant = current_setting('app.tenant', true));
 
-create function debug(inout anyelement) as $$ begin raise notice '%', $1; end $$ language plpgsql strict stable;
+create function notice(inout anyelement) as $$ begin raise notice '%', $1; end $$ language plpgsql strict stable;
 
-create policy family_has_no_parent_attribute
+create policy "attribute appears at most once in family relatives"
 on family_has_attribute
 as restrictive
 for insert
 to app
 with check (
-    not exists(
-        select from family_has_attribute ancestor_has_attribute
-        join family_ancestry f using (tenant)
+    not exists (
+        select from family_has_attribute relative_has_attribute
+        join family_with_relatives f using (tenant)
         where family_has_attribute.family = f.family
-        and ancestor_has_attribute.family = any(f.ancestors)
-        and ancestor_has_attribute.attribute = family_has_attribute.attribute
+        and family_has_attribute.attribute = relative_has_attribute.attribute
+        and (
+            relative_has_attribute.family = any(f.ancestors)
+            or relative_has_attribute.family = any(f.descendants)
+        )
     )
 );
-revoke update on family_has_attribute from app;
+revoke update on family_has_attribute from app; -- just use insert and delete
 
 create table product (
     tenant netext not null default current_setting('app.tenant', true),
@@ -153,7 +165,7 @@ create table product_value (
     channel netext null,
     language regconfig null,
     value jsonb null,
-    -- primary key (tenant, product, attribute, locale, channel), -- can't do, forces not null :/
+    -- primary key (tenant, product, attribute, locale, channel), -- can't do, forces not null, but null locale and/or channel is a valid use-case :/
     unique nulls not distinct (tenant, product, attribute, locale, channel),
     foreign key (tenant, product) references product (tenant, product) on delete cascade,
     foreign key (tenant, attribute) references attribute (tenant, attribute) on delete cascade
@@ -164,10 +176,6 @@ create policy product_value_by_tenant
 on product_value
 to app
 using (tenant = current_setting('app.tenant', true));
-
-create function localized_tsvector(language netext, value jsonb) returns tsvector
-as $$ select to_tsvector(language::regconfig, value); $$ -- wrapped because it fails as not immutable. why?
-language sql strict immutable;
 
 create index product_value_fts
 on product_value
