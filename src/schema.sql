@@ -17,8 +17,11 @@ create table family (
     family netext not null,
     parent netext null,
     primary key (tenant, family),
-    foreign key (tenant, parent) references family (tenant, family) on delete cascade deferrable
+    foreign key (tenant, parent) references family (tenant, family)
+        on update cascade
+        on delete cascade deferrable
 );
+grant update (family) on table family to app;
 alter table family enable row level security;
 
 create policy family_by_tenant
@@ -49,8 +52,11 @@ create table category (
     category netext not null,
     parent netext null,
     primary key (tenant, category),
-    foreign key (tenant, parent) references category (tenant, category) on delete cascade deferrable
+    foreign key (tenant, parent) references category (tenant, category)
+        on update cascade
+        on delete cascade deferrable
 );
+grant update (category) on table category to app;
 alter table category enable row level security;
 
 create policy category_by_tenant
@@ -73,6 +79,7 @@ create table attribute (
     type netext not null,
     primary key (tenant, attribute)
 );
+grant update (attribute) on table attribute to app;
 alter table attribute enable row level security;
 
 create policy attribute_by_tenant
@@ -85,8 +92,12 @@ create table family_has_attribute (
     family netext not null,
     attribute netext not null,
     primary key (tenant, family, attribute),
-    foreign key (tenant, family) references family (tenant, family) on delete cascade,
-    foreign key (tenant, attribute) references attribute (tenant, attribute) on delete cascade
+    foreign key (tenant, family) references family (tenant, family)
+        on update cascade
+        on delete cascade,
+    foreign key (tenant, attribute) references attribute (tenant, attribute)
+        on update cascade
+        on delete cascade
 );
 alter table family_has_attribute enable row level security;
 
@@ -95,8 +106,6 @@ on family_has_attribute
 for all
 to app
 using (tenant = current_setting('app.tenant', true));
-
-create function notice(inout anyelement) as $$ begin raise notice '%', $1; end $$ language plpgsql strict stable;
 
 create policy "attribute appears at most once in family relatives"
 on family_has_attribute
@@ -115,7 +124,6 @@ with check (
         )
     )
 );
-revoke update on family_has_attribute from app; -- just use insert and delete
 
 create table product (
     tenant netext not null default current_setting('app.tenant', true),
@@ -123,15 +131,35 @@ create table product (
     parent netext null,
     family netext not null,
     primary key (tenant, product),
-    foreign key (tenant, family) references family (tenant, family) on delete cascade,
-    foreign key (tenant, parent) references product (tenant, product) on delete cascade deferrable
+    foreign key (tenant, family) references family (tenant, family)
+        on update cascade
+        on delete cascade,
+    foreign key (tenant, parent) references product (tenant, product)
+        on update cascade
+        on delete cascade deferrable
 );
+grant update (product) on table product to app;
 alter table product enable row level security;
 
 create policy product_by_tenant
 on product
 to app
 using (tenant = current_setting('app.tenant', true));
+
+create policy "product's family must respect parent's family"
+on product
+as restrictive
+for insert
+to app
+with check (
+    parent is null or exists (
+        select from product p
+        join family pf using (family)
+        join family on family.family = product.family
+        where p.product = product.parent
+        and pf.family = family.parent
+    )
+);
 
 create recursive view product_ancestry (tenant, product, parent, family, level, ancestors) with (security_invoker) as
 select tenant, product, parent, family, 1, '{}'::text[]
@@ -147,8 +175,12 @@ create table product_in_category (
     product netext not null,
     category netext not null,
     primary key (tenant, product, category),
-    foreign key (tenant, product) references product (tenant, product) on delete cascade,
-    foreign key (tenant, category) references category (tenant, category) on delete cascade
+    foreign key (tenant, product) references product (tenant, product)
+        on update cascade
+        on delete cascade,
+    foreign key (tenant, category) references category (tenant, category)
+        on update cascade
+        on delete cascade
 );
 alter table product_in_category enable row level security;
 
@@ -167,15 +199,32 @@ create table product_value (
     value jsonb null,
     -- primary key (tenant, product, attribute, locale, channel), -- can't do, forces not null, but null locale and/or channel is a valid use-case :/
     unique nulls not distinct (tenant, product, attribute, locale, channel),
-    foreign key (tenant, product) references product (tenant, product) on delete cascade,
-    foreign key (tenant, attribute) references attribute (tenant, attribute) on delete cascade
+    foreign key (tenant, product) references product (tenant, product)
+        on update cascade
+        on delete cascade,
+    foreign key (tenant, attribute) references attribute (tenant, attribute)
+        on update cascade
+        on delete cascade
 );
+grant update (locale, channel, language, value) on table product_value to app;
 alter table product_value enable row level security;
 
 create policy product_value_by_tenant
 on product_value
 to app
 using (tenant = current_setting('app.tenant', true));
+
+create policy "attribute exists in product's family at correct tree level"
+on product_value
+as restrictive
+for insert
+to app
+with check(exists(
+    with product_family as (select family from product where product = product_value.product)
+    select from family_has_attribute fha
+    join product_family using (family)
+    where fha.attribute = product_value.attribute
+));
 
 create index product_value_fts
 on product_value
@@ -192,6 +241,6 @@ join product_value value using (tenant)
 where value.product = any(ancestors || pa.product)
 ;
 
-grant all on all tables in schema pim to app;
+grant select, insert, delete on all tables in schema pim to app;
 
 commit;
