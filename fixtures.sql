@@ -40,12 +40,12 @@ with recursive tree(family, parent, level) as (
 select family, parent from tree;
 
 -- truncate attribute cascade;
-insert into attribute (attribute, type)
-select 'attribute#' || i, 'text'
+insert into attribute (attribute, type, scopable, localizable)
+select 'attribute#' || i, 'text', true, true
 from generate_series(1, 5) i;
 
-insert into attribute (attribute, type)
-select 'parent attribute#' || i, 'text'
+insert into attribute (attribute, type, scopable, localizable)
+select 'parent attribute#' || i, 'text', false, false
 from generate_series(1, 5) i;
 
 -- truncate family_has_attribute cascade;

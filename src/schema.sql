@@ -77,6 +77,8 @@ create table attribute (
     tenant netext not null default current_setting('app.tenant', true),
     attribute netext not null,
     type netext not null,
+    scopable bool not null default false,
+    localizable bool not null default false,
     primary key (tenant, attribute)
 );
 grant update (attribute) on table attribute to app;
@@ -224,6 +226,24 @@ with check(exists(
     select from family_has_attribute fha
     join product_family using (family)
     where fha.attribute = product_value.attribute
+));
+
+create policy "has channel/locale if attribute is scopable/localizable"
+on product_value
+as restrictive
+for insert
+to app
+with check(exists(
+    select from attribute a
+    where product_value.attribute = a.attribute 
+    and (
+        (a.scopable and product_value.channel is not null)
+        or (not a.scopable and product_value.channel is null)
+    )
+    and (
+        (a.localizable and product_value.locale is not null)
+        or (not a.localizable and product_value.locale is null)
+    )
 ));
 
 create index product_value_fts
