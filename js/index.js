@@ -11,26 +11,49 @@ const zongji = new ZongJi({
 
 const client = new Client();
 client.connect().then(function() {
-    let lastTableMap = null;
+    let events = [];
     zongji.on('binlog', async function(evt) {
         if (evt.getEventName() === 'tablemap') {
             lastTableMap = evt.tableName;
             return;
         }
-        let payload = [
-            'tenant#1',
-            evt.tableName || lastTableMap,
-            evt.getEventName(),
-            JSON.stringify(evt.rows)
-        ];
-        console.log(payload);
-        const res = await client.query('call public.handle_mysql_event($1, $2, $3, $4)', payload);
+        if (['writerows', 'updaterows', 'deleterows'].includes(evt.getEventName())) {
+            events.push({
+                tenant: 'tenant#1',// TODO argv or env
+                table: evt.tableName || lastTableMap,
+                name: evt.getEventName(),
+                rows: JSON.stringify(evt.rows)
+            });
+        }
+        if (evt.getEventName() === 'xid') {
+            events.forEach(async (payload, index) => {
+                await client.query({
+                    name: 'upsert-mysql-binlog-event',
+                    text: `insert into "mysql binlog".event
+                           (tenant, table_, name, xid, timestamp_, next_position, index_, rows)
+                           values ($1, $2, $3, $4, $5, $6, $7, $8)
+                           on conflict do nothing
+                    `,
+                    values: [
+                        payload.tenant,
+                        payload.table,
+                        payload.name,
+                        evt.xid,
+                        evt.timestamp,
+                        evt.nextPosition,
+                        index,
+                        payload.rows
+                    ]
+                })
+            });
+            events = [];
+        }
     });
 });
 
 
 zongji.start({
-  includeEvents: ['tablemap', 'writerows', 'updaterows', 'deleterows']
+  includeEvents: ['tablemap', 'xid', 'writerows', 'updaterows', 'deleterows']
 });
 
 process.on('SIGINT', async function() {
