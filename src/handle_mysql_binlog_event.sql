@@ -29,7 +29,7 @@ set local search_path to "mysql binlog";
 
 create or replace function handle_mysql_event(inout event event)
 language plpgsql
-set search_path to "mysql binlog", pim
+set search_path to "mysql binlog", pim, public
 as $$ begin
     perform set_config('lock_timeout', '2s', true); 
     case
@@ -48,19 +48,15 @@ as $$ begin
                 returning *
             ),
             by_attr (id, attribute, rest) as (
-              select id, j.* from to_insert, jsonb_each(raw_values::jsonb) j
+                select id, j.* from to_insert, jsonb_each(raw_values::jsonb) j
             ),
             by_channel (id, attribute, channel, rest) as (
-              select id, attribute,
-                  case j.key when '<all_channels>' then null else j.key end,
-                  j.value
-              from by_attr, jsonb_each(rest) j
+                select id, attribute, case j.key when '<all_channels>' then null else j.key end, j.value
+                from by_attr, jsonb_each(rest) j
             ),
             raw_value (id, attribute, channel, locale, value) as (
-              select id, attribute, channel,
-                  case j.key when '<all_locales>' then null else j.key end,
-                  j.value
-              from by_channel, jsonb_each(rest) j
+                select id, attribute, channel, case j.key when '<all_locales>' then null else j.key end, j.value
+                from by_channel, jsonb_each(rest) j
             )
             merge into product_value value
             using raw_value new
@@ -72,7 +68,6 @@ as $$ begin
             when not matched then
                 insert values(event.tenant, new.id::text, new.attribute, new.channel, new.locale, 'simple'::regconfig, new.value)
             ;
-
 
         when event.table_ = 'product' and event.name = 'updaterows' then
             with to_update as (
@@ -89,28 +84,18 @@ as $$ begin
                 returning *
             ),
             by_attr (id, attribute, rest) as (
-              select (before).id::text, j.* from to_update, jsonb_each((after).raw_values::jsonb) j
+                select (before).id::text, j.* from to_update, jsonb_each((after).raw_values::jsonb) j
             ),
             by_channel (id, attribute, channel, rest) as (
-              select id, attribute,
-                  case j.key when '<all_channels>' then null else j.key end,
-                  j.value
-              from by_attr, jsonb_each(rest) j
+                select id, attribute, case j.key when '<all_channels>' then null else j.key end, j.value
+                from by_attr, jsonb_each(rest) j
             ),
             raw_value (id, attribute, channel, locale, value) as (
-              select distinct id, attribute, channel,
-                  case j.key when '<all_locales>' then null else j.key end,
-                  j.value
-              from by_channel, jsonb_each(rest) j
-            ),
-            to_delete as (
-                delete from product_value extra
-                using raw_value new
-                where (extra.tenant, extra.product, public.notice(extra.attribute)) = (event.tenant, new.id::text, public.notice(new.attribute))
-                returning *
+                select distinct id, attribute, channel, case j.key when '<all_locales>' then null else j.key end, j.value
+                from by_channel, jsonb_each(rest) j
             )
             merge into product_value value
-            using (select new.* from raw_value new, to_delete) as new
+            using raw_value new
                 on (value.tenant, value.product, value.attribute) = (event.tenant, new.id::text, new.attribute)
             when matched then
                 update set locale = new.locale,
@@ -120,7 +105,30 @@ as $$ begin
                 insert values(event.tenant, new.id::text, new.attribute, new.channel, new.locale, 'simple'::regconfig, new.value)
             ;
 
-        else raise notice 'UNSUPPORTED';
+            with to_update as (
+                select distinct after
+                from jsonb_array_elements(event.rows) r,
+                jsonb_populate_record(null::mysql_product, r->'after') after
+            ),
+            by_attr (id, attribute) as (
+                select (after).id::text, notice(j.key) from to_update, jsonb_each((after).raw_values::jsonb) j
+            )
+            delete from product_value extra
+            using by_attr new
+            where (extra.tenant, extra.product) = (event.tenant, new.id::text)
+            and extra.attribute != new.attribute
+            ;
+
+        when event.table_ = 'product' and event.name = 'deleterows' then
+            with to_delete as (
+                select * from jsonb_populate_recordset(null::mysql_product, event.rows) r
+            )
+            delete from product
+            using to_delete
+            where (product.tenant, product.product) = (event.tenant, to_delete.id::text)
+            ;
+
+        else raise notice 'UNSUPPORTED %', event;
     end case;
 -- exception when others then
 --     raise warning 'error %', sqlerrm;
