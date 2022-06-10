@@ -39,9 +39,10 @@ as $$ begin
             ),
             inserted_product as (
                 insert into product (tenant, product, parent, family)
-                select event.tenant, id, null, family
+                select event.tenant, id::text, null, family
                 from to_insert
-                on conflict on (tenant, product) do update
+                on conflict (tenant, product)
+                do update
                     set parent = excluded.parent,
                     family = excluded.family
                 returning *
@@ -55,32 +56,25 @@ as $$ begin
                   j.value
               from by_attr, jsonb_each(rest) j
             ),
-            by_locale (id, attribute, channel, locale, value) as (
+            raw_value (id, attribute, channel, locale, value) as (
               select id, attribute, channel,
                   case j.key when '<all_locales>' then null else j.key end,
                   j.value
               from by_channel, jsonb_each(rest) j
             )
-            insert into product_value (tenant, product, attribute, locale, channel, language, value)
-            select distinct event.tenant, id, attribute, locale, channel, 'simple'::regconfig, value
-            from by_locale
-            -- for update skip locked
-            -- on conflict on (tenant, product, attribute, locale, channel) do update
-            -- do update
-            --     set locale = excluded.locale,
-            --     channel = excluded.channel,
-            --     value = excluded.value
+            merge into product_value value
+            using raw_value new
+                on (value.tenant, value.product, value.attribute) = (event.tenant, new.id::text, new.attribute)
+            when matched then
+                update set locale = new.locale,
+                channel = new.channel,
+                value = new.value
+            when not matched then
+                insert values(event.tenant, new.id::text, new.attribute, new.channel, new.locale, 'simple'::regconfig, new.value)
             ;
-            raise notice '%', 'INSERTED';
+
 
         when event.table_ = 'product' and event.name = 'updaterows' then
-        --     update product
-        --     set product = after.id::text, parent = after.parent, family = after.family
-        --     from jsonb_array_elements(event.rows) r,
-        --     jsonb_populate_record(null::mysql_product, r->'after') after,
-        --     jsonb_populate_record(null::mysql_product, r->'before') before
-        --     where tenant = event.tenant
-        --     and product = before.id::text;
             with to_update as (
                 select distinct before, after
                 from jsonb_array_elements(event.rows) r,
@@ -91,8 +85,7 @@ as $$ begin
                 update product
                 set product = (after).id::text, parent = (after).parent, family = (after).family
                 from to_update
-                where tenant = event.tenant
-                and product = (before).id::text
+                where (tenant, product) = (event.tenant, (before).id::text)
                 returning *
             ),
             by_attr (id, attribute, rest) as (
@@ -104,27 +97,33 @@ as $$ begin
                   j.value
               from by_attr, jsonb_each(rest) j
             ),
-            by_locale (id, attribute, channel, locale, value) as (
+            raw_value (id, attribute, channel, locale, value) as (
               select distinct id, attribute, channel,
                   case j.key when '<all_locales>' then null else j.key end,
                   j.value
               from by_channel, jsonb_each(rest) j
+            ),
+            to_delete as (
+                delete from product_value extra
+                using raw_value new
+                where (extra.tenant, extra.product, public.notice(extra.attribute)) = (event.tenant, new.id::text, public.notice(new.attribute))
+                returning *
             )
-            insert into product_value (tenant, product, attribute, locale, channel, language, value)
-            select event.tenant, id, attribute, locale, channel, 'simple'::regconfig, public.notice(value)
-            from by_locale
-            -- for update skip locked
-            -- on conflict on constraint product_value_tenant_product_attribute_locale_channel_key
-            -- do update
-            --     set locale = excluded.locale,
-            --     channel = excluded.channel,
-            --     value = excluded.value
+            merge into product_value value
+            using (select new.* from raw_value new, to_delete) as new
+                on (value.tenant, value.product, value.attribute) = (event.tenant, new.id::text, new.attribute)
+            when matched then
+                update set locale = new.locale,
+                channel = new.channel,
+                value = new.value
+            when not matched then
+                insert values(event.tenant, new.id::text, new.attribute, new.channel, new.locale, 'simple'::regconfig, new.value)
             ;
 
         else raise notice 'UNSUPPORTED';
     end case;
-exception when others then
-    raise warning 'error %', sqlerrm;
+-- exception when others then
+--     raise warning 'error %', sqlerrm;
 end $$;
 
 create or replace function consume_queue(tenants text[] default null, batch_size int default 10) returns setof event
