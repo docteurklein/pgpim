@@ -77,8 +77,8 @@ create table attribute (
     tenant netext not null default current_setting('app.tenant', true),
     attribute netext not null,
     type netext not null,
-    scopable bool not null default false,
-    localizable bool not null default false,
+    scopable boolean not null default false,
+    localizable boolean not null default false,
     primary key (tenant, attribute)
 );
 grant update (attribute) on table attribute to app;
@@ -91,8 +91,9 @@ using (tenant = current_setting('app.tenant', true));
 
 create table family_has_attribute (
     tenant netext not null default current_setting('app.tenant', true),
-    family netext not null,
+    family netext not null, -- not null, otherwise it's a draft
     attribute netext not null,
+    to_complete boolean not null,
     primary key (tenant, family, attribute),
     foreign key (tenant, family) references family (tenant, family)
         on update cascade
@@ -195,12 +196,12 @@ create table product_value (
     tenant netext not null default current_setting('app.tenant', true),
     product netext not null,
     attribute netext not null,
-    locale netext null,
-    channel netext null,
+    locale netext not null default '__all__', -- hack for pk
+    channel netext not null default '__all__',
     language regconfig null,
-    value jsonb null,
-    -- primary key (tenant, product, attribute, locale, channel), -- can't do, forces not null, but null locale and/or channel is a valid use-case :/
-    unique nulls not distinct (tenant, product, attribute, locale, channel),
+    value jsonb not null,
+    primary key (tenant, product, attribute, locale, channel),
+    -- constraint "unique" unique nulls not distinct (tenant, product, attribute, locale, channel),
     foreign key (tenant, product) references product (tenant, product)
         on update cascade
         on delete cascade,
@@ -221,7 +222,7 @@ on product_value
 as restrictive
 for insert
 to app
-with check(exists(
+with check (exists(
     with product_family as (select family from product where product = product_value.product)
     select from family_has_attribute fha
     join product_family using (family)
@@ -233,16 +234,16 @@ on product_value
 as restrictive
 for insert
 to app
-with check(exists(
+with check (exists(
     select from attribute a
     where product_value.attribute = a.attribute 
     and (
-        (a.scopable and product_value.channel is not null)
-        or (not a.scopable and product_value.channel is null)
+        (a.scopable and product_value.channel <> '__all__')
+        or (not a.scopable and product_value.channel = '__all__')
     )
     and (
-        (a.localizable and product_value.locale is not null)
-        or (not a.localizable and product_value.locale is null)
+        (a.localizable and product_value.locale <> '__all__')
+        or (not a.localizable and product_value.locale = '__all__')
     )
 ));
 
@@ -259,6 +260,20 @@ select value.tenant, value.product, attribute, locale, channel, language, value,
 from product_ancestry pa
 join product_value value using (tenant)
 where value.product = any(ancestors || pa.product)
+;
+
+create view product_completeness (tenant, product, channel, locale, completed, to_complete, total) as
+select fha.tenant, product.product, channel, locale,
+    count(1) filter (where value is not null),
+    count(1) filter (where to_complete),
+    count(1)
+from product
+join family_has_attribute fha using (family)
+-- join attribute using (attribute)
+left join product_value value
+    on value.product = product.product
+    and value.attribute = fha.attribute
+group by 1, 2, 3, 4
 ;
 
 grant select, insert, delete on all tables in schema pim to app;

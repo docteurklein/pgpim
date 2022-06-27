@@ -24,7 +24,7 @@ services:
 
   mysql:
     image: mysql
-    command: '--log-bin --binlog-format=row --binlog-row-image=full'
+    command: '--log-bin --binlog-format=row --binlog-row-image=full --binlog-row-metadata=full'
     ports:
       - '0:3306'
     environment:

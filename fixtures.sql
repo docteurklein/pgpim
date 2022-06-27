@@ -42,21 +42,21 @@ select family, parent from tree;
 -- truncate attribute cascade;
 insert into attribute (attribute, type, scopable, localizable)
 select 'attribute#' || i, 'text', true, true
-from generate_series(1, 5) i;
+from generate_series(1, 20) i;
 
 insert into attribute (attribute, type, scopable, localizable)
 select 'parent attribute#' || i, 'text', false, false
-from generate_series(1, 5) i;
+from generate_series(1, 15) i;
 
 -- truncate family_has_attribute cascade;
-insert into family_has_attribute (family, attribute)
-select family, attribute
+insert into family_has_attribute (family, attribute, required)
+select family, attribute, random() > 0.5
 from family, attribute
 where parent is not null
 and attribute not like 'parent attr%';
 
-insert into family_has_attribute (family, attribute)
-select family, attribute
+insert into family_has_attribute (family, attribute, required)
+select family, attribute, random() > 0.5
 from family, attribute
 where parent is null
 and attribute like 'parent attr%';
@@ -64,7 +64,7 @@ and attribute like 'parent attr%';
 -- truncate product cascade;
 insert into product (product, parent, family)
 select format('product#%s of %s', i, family), null, family
-from generate_series(1, 3) i,
+from generate_series(1, 10) i,
 family
 where family.parent is null;
 
@@ -78,7 +78,18 @@ join family family_child on family_child.parent = family.family
 
 -- truncate product_value cascade;
 insert into product_value (product, attribute, locale, channel, language, value)
-select product, attribute, locale, channel, 'simple'::regconfig, to_jsonb(sentence())
+select product, attribute, '__all__', '__all__', 'simple'::regconfig, to_jsonb('parent data: ' || coalesce(sentence(), 'default'))
+from product
+join family_has_attribute using (family)
+join family using (family)
+join attribute using (attribute)
+where product.parent is null
+and family.parent is null
+and random() > 0.8
+;
+
+insert into product_value (product, attribute, locale, channel, language, value)
+select product, attribute, locale, channel, 'simple'::regconfig, to_jsonb(coalesce(sentence(), 'default'))
 from (values ('en_EN'), ('de_DE')) locale (locale),
 (values ('ecommerce'), ('print')) channel (channel),
 product
@@ -87,16 +98,7 @@ join family using (family)
 join attribute using (attribute)
 where product.parent is not null
 and family.parent is not null
-;
-
-insert into product_value (product, attribute, locale, channel, language, value)
-select product, attribute, null, null, 'simple'::regconfig, to_jsonb('parent data: ' || sentence())
-from product
-join family_has_attribute using (family)
-join family using (family)
-join attribute using (attribute)
-where product.parent is null
-and family.parent is null
+and random() > 0.7
 ;
 
 commit;

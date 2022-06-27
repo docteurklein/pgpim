@@ -6,6 +6,7 @@ begin;
 -- create schema "mysql binlog";
 set local search_path to "mysql binlog";
 
+-- drop table if exists event cascade;
 -- create table event (
 --     tenant text not null,
 --     table_ text not null,
@@ -29,19 +30,20 @@ set local search_path to "mysql binlog";
 
 create or replace function handle_mysql_event(inout event event)
 language plpgsql
-set search_path to "mysql binlog", pim, public
+set search_path to "mysql binlog", pim
 as $$ begin
     perform set_config('lock_timeout', '2s', true); 
+    raise notice '% % %', event.xid, event.table_, event.index_;
     case
-        when event.table_ = 'product' and event.name = 'writerows' then
+        when event.table_ = 'pim_catalog_product' and event.name = 'writerows' then
             with to_insert as (
-                select * from jsonb_populate_recordset(null::mysql_product, event.rows) r
+                select * from jsonb_populate_recordset(null::mysql_product, event.rows->'after') r
             ),
             inserted_product as (
                 insert into product (tenant, product, parent, family)
                 select event.tenant, id::text, null, family
                 from to_insert
-                on conflict (tenant, product)
+                on conflict (tenant, product) -- should never happen, let's make it resilient anyway
                 do update
                     set parent = excluded.parent,
                     family = excluded.family
@@ -58,18 +60,36 @@ as $$ begin
                 select id, attribute, channel, case j.key when '<all_locales>' then null else j.key end, j.value
                 from by_channel, jsonb_each(rest) j
             )
-            merge into product_value value
-            using raw_value new
-                on (value.tenant, value.product, value.attribute) = (event.tenant, new.id::text, new.attribute)
-            when matched then
-                update set locale = new.locale,
-                channel = new.channel,
-                value = new.value
-            when not matched then
-                insert values(event.tenant, new.id::text, new.attribute, new.channel, new.locale, 'simple'::regconfig, new.value)
+            insert into product_value (tenant, product, attribute, channel, locale, language, value)
+            select event.tenant, id::text, attribute, channel, locale, 'simple'::regconfig, value
+            from raw_value
+            -- merge into product_value value -- existing row should never exist, let's just use insert above, use merge for resilience
+            -- using raw_value new
+            --     on (value.tenant, value.product, value.attribute) = (event.tenant, new.id::text, new.attribute)
+            -- when matched then
+            --     update set locale = new.locale,
+            --     channel = new.channel,
+            --     value = new.value
+            -- when not matched then
+            --     insert values(event.tenant, new.id::text, new.attribute, new.channel, new.locale, 'simple'::regconfig, new.value)
             ;
 
-        when event.table_ = 'product' and event.name = 'updaterows' then
+        when event.table_ = 'pim_catalog_product' and event.name = 'updaterows' then
+            with to_update as (
+                select distinct after
+                from jsonb_array_elements(event.rows) r,
+                jsonb_populate_record(null::mysql_product, r->'after') after
+            ),
+            by_attr (id, attribute) as (
+                select (after).id::text, j.key from to_update
+                left join jsonb_each((after).raw_values::jsonb) j on true
+            )
+            delete from product_value extra -- cleanup all values that don't appear in new raw_values (or if raw_values is empty)
+            using by_attr new
+            where (extra.tenant, extra.product) = (event.tenant, new.id::text)
+            and (extra.attribute != new.attribute or new.attribute is null)
+            ;
+
             with to_update as (
                 select distinct before, after
                 from jsonb_array_elements(event.rows) r,
@@ -94,7 +114,7 @@ as $$ begin
                 select distinct id, attribute, channel, case j.key when '<all_locales>' then null else j.key end, j.value
                 from by_channel, jsonb_each(rest) j
             )
-            merge into product_value value
+            merge into product_value value -- had to use merge because insert on conflict do update was blocking
             using raw_value new
                 on (value.tenant, value.product, value.attribute) = (event.tenant, new.id::text, new.attribute)
             when matched then
@@ -105,21 +125,7 @@ as $$ begin
                 insert values(event.tenant, new.id::text, new.attribute, new.channel, new.locale, 'simple'::regconfig, new.value)
             ;
 
-            with to_update as (
-                select distinct after
-                from jsonb_array_elements(event.rows) r,
-                jsonb_populate_record(null::mysql_product, r->'after') after
-            ),
-            by_attr (id, attribute) as (
-                select (after).id::text, notice(j.key) from to_update, jsonb_each((after).raw_values::jsonb) j
-            )
-            delete from product_value extra
-            using by_attr new
-            where (extra.tenant, extra.product) = (event.tenant, new.id::text)
-            and extra.attribute != new.attribute
-            ;
-
-        when event.table_ = 'product' and event.name = 'deleterows' then
+        when event.table_ = 'pim_catalog_product' and event.name = 'deleterows' then
             with to_delete as (
                 select * from jsonb_populate_recordset(null::mysql_product, event.rows) r
             )
@@ -146,11 +152,11 @@ with inflight as (
   for update skip locked -- serializable? ok by tenant
   limit batch_size
 )
--- delete from event
--- using inflight i
-update event
-set handled = true
-from inflight i
+delete from event
+using inflight i
+-- update event
+-- set handled = true
+-- from inflight i
 where (event.tenant, event.xid, event.index_) = (i.tenant, i.xid, i.index_)
 returning event.* -- (handle_mysql_event(event)).*
 $$;
