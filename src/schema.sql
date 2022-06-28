@@ -12,6 +12,16 @@ grant usage on schema pim to app;
 
 create domain netext as text constraint "non-empty text" check (value <> '');
 
+create table locale (
+    locale netext primary key
+);
+insert into locale values ('__all__');
+
+create table channel (
+    channel netext primary key
+);
+insert into channel values ('__all__');
+
 create table family (
     tenant netext not null default current_setting('app.tenant', true),
     family netext not null,
@@ -173,6 +183,15 @@ select child.tenant, child.product, child.parent, child.family, level + 1, ances
 from product_ancestry parent
 join product child on child.parent = parent.product;
 
+create view product_with_relatives as
+select pa.tenant, pa.product, pa.family, pa.ancestors, coalesce(
+    array_agg(descendant.product) filter (where descendant.product is not null),
+    '{}'
+) descendants
+from product_ancestry pa
+left join product_ancestry descendant on pa.product = any(descendant.ancestors)
+group by 1, 2, 3, 4;
+
 create table product_in_category (
     tenant netext not null default current_setting('app.tenant', true),
     product netext not null,
@@ -196,8 +215,8 @@ create table product_value (
     tenant netext not null default current_setting('app.tenant', true),
     product netext not null,
     attribute netext not null,
-    locale netext not null default '__all__', -- hack for pk
-    channel netext not null default '__all__',
+    locale netext not null default '__all__' references locale(locale), -- hack for pk
+    channel netext not null default '__all__' references channel(channel),
     language regconfig null,
     value jsonb not null,
     primary key (tenant, product, attribute, locale, channel),
@@ -262,18 +281,19 @@ join product_value value using (tenant)
 where value.product = any(ancestors || pa.product)
 ;
 
-create view product_completeness (tenant, product, channel, locale, completed, to_complete, total) as
-select fha.tenant, product.product, channel, locale,
-    count(1) filter (where value is not null),
-    count(1) filter (where to_complete),
-    count(1)
-from product
+create view product_completeness (tenant, product, attribute, channel, locale) with (security_invoker) as
+select fha.tenant, p.product, fha.attribute, channel.channel, locale.locale
+from channel, locale, product p
 join family_has_attribute fha using (family)
--- join attribute using (attribute)
+join attribute a using (attribute)
 left join product_value value
-    on value.product = product.product
+    on value.product = p.product
     and value.attribute = fha.attribute
-group by 1, 2, 3, 4
+    and value.channel = channel
+    and value.locale = locale
+where value is null
+and case when a.localizable then locale.locale <> '__all__' else true end
+and case when a.localizable then channel.channel <> '__all__' else true end
 ;
 
 grant select, insert, delete on all tables in schema pim to app;

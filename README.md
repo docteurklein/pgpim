@@ -54,3 +54,20 @@ curl --request POST --url 0:8083/connectors --header 'Content-Type: application/
 }
 EOF
 ```
+
+## queries
+
+### get missing values for a given product/channel/locale, and where in the product tree
+
+```sql
+select c.*
+from product_completeness c
+join product_with_relatives p
+    on c.product = any(p.descendants || p.product)
+where 'nike air max red 13"' = any(p.descendants)
+and channel = 'ecommerce'
+and locale = 'fr_FR'
+;
+
+```
+
