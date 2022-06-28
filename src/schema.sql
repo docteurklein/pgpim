@@ -16,11 +16,13 @@ create table locale (
     locale netext primary key
 );
 insert into locale values ('__all__');
+create rule "keep __all__" as on delete to locale where locale = '__all__' do instead nothing;
 
 create table channel (
     channel netext primary key
 );
 insert into channel values ('__all__');
+create rule "keep __all__" as on delete to channel where channel = '__all__' do instead nothing;
 
 create table family (
     tenant netext not null default current_setting('app.tenant', true),
@@ -215,11 +217,11 @@ create table product_value (
     tenant netext not null default current_setting('app.tenant', true),
     product netext not null,
     attribute netext not null,
-    locale netext not null default '__all__' references locale(locale), -- hack for pk
-    channel netext not null default '__all__' references channel(channel),
+    locale netext not null default '__all__' references locale(locale) on delete cascade,
+    channel netext not null default '__all__' references channel(channel) on delete cascade,
     language regconfig null,
     value jsonb not null,
-    primary key (tenant, product, attribute, locale, channel),
+    primary key (tenant, product, attribute, locale, channel), -- need __all__ instead of null
     -- constraint "unique" unique nulls not distinct (tenant, product, attribute, locale, channel),
     foreign key (tenant, product) references product (tenant, product)
         on update cascade
@@ -281,19 +283,22 @@ join product_value value using (tenant)
 where value.product = any(ancestors || pa.product)
 ;
 
-create view product_completeness (tenant, product, attribute, channel, locale) with (security_invoker) as
-select fha.tenant, p.product, fha.attribute, channel.channel, locale.locale
-from channel, locale, product p
+create view missing_value (tenant, product, descendants, attribute, channel, locale)
+with (security_invoker)
+as select fha.tenant, p.product, p.descendants, fha.attribute, c.channel, l.locale
+from channel c
+cross join locale l
+cross join product_with_relatives p
 join family_has_attribute fha using (family)
 join attribute a using (attribute)
 left join product_value value
     on value.product = p.product
     and value.attribute = fha.attribute
-    and value.channel = channel
-    and value.locale = locale
+    and value.channel = c.channel
+    and value.locale = l.locale
 where value is null
-and case when a.localizable then locale.locale <> '__all__' else true end
-and case when a.localizable then channel.channel <> '__all__' else true end
+and case when a.scopable then c.channel <> '__all__' else c.channel = '__all__' end
+and case when a.localizable then l.locale <> '__all__' else l.locale = '__all__' end
 ;
 
 grant select, insert, delete on all tables in schema pim to app;

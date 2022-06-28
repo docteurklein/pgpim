@@ -44,12 +44,13 @@ insert into product (product, parent, family) values
 ;
 
 insert into product_value (product, attribute, channel, locale, value) values
--- ('nike air max', 'description', 'ecommerce', 'en_US', to_jsonb(text 'Nice shoes')),
+('nike air max', 'description', 'ecommerce', 'en_US', to_jsonb(text 'Nice shoes')),
+('nike air max', 'description', 'mobile', 'en_US', to_jsonb(text 'Nice!')),
 ('nike air max', 'description', 'ecommerce', 'fr_FR', to_jsonb(text 'Belles chaussures')),
-('nike air max', 'description', 'ecommerce', 'de_DE', to_jsonb(text 'Belles chaussures')),
+-- ('nike air max', 'description', 'ecommerce', 'de_DE', to_jsonb(text 'Schöne schuhe')),
 ('nike air max', 'image', 'ecommerce', 'en_US', to_jsonb(text 'https://example.org/nike-air-max.png')),
 ('nike air max', 'image', 'ecommerce', 'fr_FR', to_jsonb(text 'https://example.org/nike-air-max.png')),
-    ('nike air max red', 'color', '__all__', '__all__', to_jsonb(text 'blue'))
-        -- ('nike air max red 13"', 'size', '__all__', '__all__', to_jsonb(13))
+    ('nike air max red', 'color', '__all__', '__all__', to_jsonb(text 'blue')),
+        ('nike air max red 13"', 'size', '__all__', '__all__', to_jsonb(13))
 ;
 commit;
