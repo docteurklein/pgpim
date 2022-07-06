@@ -6,4 +6,3 @@ raise notice $notice$
 #########
 $notice$, $1;
 end $$ language plpgsql strict stable;
-
