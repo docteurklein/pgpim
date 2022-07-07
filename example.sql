@@ -9,14 +9,15 @@ set local role to app; -- rls compliant :)
 insert into channel (channel) values ('ecommerce'), ('mobile');
 insert into locale (locale) values ('fr_FR'), ('de_DE'), ('en_US');
 
-insert into attribute (attribute, type, scopable, localizable) values
-('description', 'text', true, true),
-('image', 'image', true, true),
-('seo', 'text', true, true),
-('dimension', 'text', true, true),
-('color', 'text', false, false),
-('flashy', 'bool', false, false),
-('size', 'number', false, false)
+insert into attribute (attribute, type, is_unique, scopable, localizable) values
+('description', 'text', false, true, true),
+('image', 'image', false, true, true),
+('seo', 'text', false, true, true),
+('dimension', 'text', false, true, true),
+('color', 'text', false, false, false),
+('flashy', 'bool', false, false, false),
+('EAN', 'text', true, false, false),
+('size', 'number', false, false, false)
 ;
 
 insert into family (family, parent) values
@@ -26,6 +27,7 @@ insert into family (family, parent) values
 ;
 
 insert into family_has_attribute (family, attribute, to_complete) values
+('shoe', 'EAN', true),
 ('shoe', 'description', true),
 ('shoe', 'image', true),
 ('shoe', 'seo', false),
@@ -36,8 +38,9 @@ insert into family_has_attribute (family, attribute, to_complete) values
 ;
 
 insert into product (product, parent, family) values
+('adidas', null, 'shoe'),
 ('nike air max', null, 'shoe');
-insert into product (product, parent, family) values -- can't do in one insert because RLS
+insert into product (product, parent, family) values -- can't do in one insert because RLS (parent needs to be inserted first)
     ('nike air max red', 'nike air max', 'shoe by color');
 insert into product (product, parent, family) values
         ('nike air max red 13', 'nike air max red', 'shoe by size'),

@@ -18,10 +18,14 @@ create table locale (
     primary key (tenant, locale)
 );
 
+alter table locale enable row level security;
+create policy "see all" on locale for all to app using (true);
+create policy "keep __all__ on delete" on locale as restrictive for delete to app using (locale <> '__all__');
+create policy "keep __all__ on update" on locale as restrictive for update to app using (locale <> '__all__');
+
 grant select, insert, delete, update (locale) on table locale to app;
 
-insert into locale (locale) values ('__all__');
-create rule "keep __all__" as on delete to locale where locale = '__all__' do instead nothing;
+insert into locale (locale) values ('__all__'); -- equivalent to NULL
 
 create table channel (
     tenant netext default current_setting('app.tenant', true),
@@ -29,9 +33,12 @@ create table channel (
     primary key (tenant, channel)
 );
 
-grant select, insert, delete, update (channel) on table channel to app;
+alter table locale enable row level security;
+create policy "see all" on channel for all to app using (true);
+create policy "keep __all__ on delete" on channel as restrictive for delete to app using (channel <> '__all__');
+create policy "keep __all__ on update" on channel as restrictive for update to app using (channel <> '__all__');
 
-create rule "keep __all__" as on delete to channel where channel = '__all__' do instead nothing;
+grant select, insert, delete, update (channel) on table channel to app;
 
 insert into channel (channel) values ('__all__');
 
@@ -108,8 +115,9 @@ join category child on child.parent = parent.category;
 create table attribute (
     attribute netext primary key,
     type netext not null,
-    scopable boolean not null default false,
-    localizable boolean not null default false
+    is_unique boolean not null,
+    scopable boolean not null,
+    localizable boolean not null
 );
 grant select, insert, delete, update (attribute, type) on table attribute to app; -- 'update' allows possibly invalid product_value
 
@@ -166,7 +174,7 @@ create table product (
         on update cascade
         on delete cascade deferrable
 );
-grant select, insert, delete, update (product) on table product to app; -- changing parent or family would break product_descendants and policies about family and product_value
+grant select, insert, delete, update (product) on table product to app; -- updating parent or family would break product_descendant and policies about family and product_value
 alter table product enable row level security;
 
 create index product_parent on product (tenant, parent);
@@ -192,16 +200,20 @@ with check (
     )
 );
 
-create table product_descendants (
+create table product_descendant (
     tenant netext not null,
     product text not null,
-    descendants text[] not null,
-    primary key (tenant, product),
-    foreign key (tenant, product) references product (tenant, product) on delete cascade
+    descendant text not null,
+    primary key (tenant, product, descendant),
+    foreign key (tenant, product) references product (tenant, product)
+        on update cascade
+        on delete cascade,
+    foreign key (tenant, descendant) references product (tenant, product)
+        on update cascade
+        on delete cascade
 );
 
-grant select on table product_descendants to app;
--- create index product_by_descendants on product_descendants using gin (tenant, product, descendants); -- ERROR:  index row requires 146800 bytes, maximum size is 8191
+grant select on table product_descendant to app;
 
 
 create function maintain_product_descendants_on_insert()
@@ -210,8 +222,6 @@ language plpgsql
 security definer
 as $$
 begin
-    insert into product_descendants (tenant, product, descendants) select tenant, product, '{}' from new_product; -- will be filled later
-
     with recursive ancestry (tenant, descendant, ancestor) as (
         select tenant, product, parent
         from new_product
@@ -219,14 +229,11 @@ begin
         select parent.tenant, a.descendant, parent.parent
         from ancestry a
         join product parent on (a.tenant, a.ancestor) = (parent.tenant, parent.product)
-    ),
-    agg(descendants) as (
-        select array_agg(distinct descendant) from ancestry
     )
-    update product_descendants pd
-    set descendants = pd.descendants || agg.descendants
-    from ancestry a, agg
-    where (pd.tenant, pd.product) = (a.tenant, a.ancestor);
+    insert into product_descendant
+    select tenant, ancestor, descendant
+    from ancestry a
+    where ancestor is not null;
 
     return null;
 end
@@ -237,109 +244,6 @@ on product
 referencing new table as new_product
 for each statement
 execute procedure maintain_product_descendants_on_insert();
-
-create function maintain_product_descendants_on_delete()
-returns trigger
-language plpgsql 
-security definer
-as $$
-begin
-    with recursive ancestry (tenant, descendant, ancestor) as (
-        select tenant, product, parent
-        from old_product
-        union all
-        select parent.tenant, a.descendant, parent.parent
-        from ancestry a
-        join product parent on (a.tenant, a.ancestor) = (parent.tenant, parent.product)
-    ),
-    agg(descendants) as (
-        select array_agg(distinct descendant) from ancestry
-    )
-    update product_descendants pd
-    set descendants = (select coalesce(array_agg(elem), '{}')
-        from agg, unnest(pd.descendants) elem
-        where elem <> all(agg.descendants)
-    )
-    from ancestry a, agg
-    where (pd.tenant, pd.product) = (a.tenant, a.ancestor);
-
-    delete from product_descendants pd
-    using old_product
-    where (pd.tenant, pd.product) = (old_product.tenant, old_product.product);
-
-
-    return null;
-end
-$$;
-create trigger maintain_product_descendants_on_delete
-after delete
-on product
-referencing old table as old_product
-for each statement
-execute procedure maintain_product_descendants_on_delete();
-
--- create function maintain_product_descendants_on_insert()
--- returns trigger
--- language plpgsql 
--- security definer
--- as $$
--- begin
---     insert into product_descendants values (new.tenant, new.product, '{}'); -- will be filled later
--- 
---     with recursive ancestry as (
---         select product, parent
---         from product
---         where (tenant, product) = (new.tenant, new.parent)
---         union all
---         select a.product, a.parent
---         from ancestry c
---         join product a on (new.tenant, c.parent) = (a.tenant, a.product)
---     )
---     update product_descendants pd
---     set descendants = descendants || new.product
---     from ancestry a
---     where (pd.tenant, pd.product) = (new.tenant, a.product);
--- 
---     return new;
--- end
--- $$;
--- create trigger maintain_product_descendants_on_insert
--- after insert
--- on product
--- for each row
--- execute procedure maintain_product_descendants_on_insert();
-
--- create function maintain_product_descendants_on_delete()
--- returns trigger
--- language plpgsql 
--- security definer
--- as $$
--- begin
---     with recursive ancestry as (
---         select product, parent
---         from product
---         where (tenant, product) = (old.tenant, old.product)
---         union all
---         select a.product, a.parent
---         from ancestry c
---         join product a on (old.tenant, c.parent) = (a.tenant, a.product)
---     )
---     update product_descendants pd
---     set descendants = array_remove(descendants, old.product)
---     from ancestry a
---     where (pd.tenant, pd.product) = (old.tenant, a.product)
---     and public.notice(old.product) is not null and public.notice(descendants) is not null;
--- 
---     delete from product_descendants where (tenant, product) = (old.tenant, old.product);
--- 
---     return old;
--- end
--- $$;
--- create trigger maintain_product_descendants_on_delete
--- before delete
--- on product
--- for each row
--- execute procedure maintain_product_descendants_on_delete();
 
 create recursive view product_ancestry (tenant, product, parent, family, level, ancestors)
 with (security_invoker)
@@ -393,6 +297,7 @@ create table product_value (
     locale netext not null default '__all__',
     channel netext not null default '__all__',
     language regconfig null,
+    is_unique boolean not null,
     value jsonb not null,
     primary key (tenant, product, attribute, locale, channel), -- need __all__ instead of null
     -- constraint "unique" unique nulls not distinct (tenant, product, attribute, locale, channel),
@@ -410,21 +315,14 @@ create table product_value (
         on delete cascade
 );
 
-grant select, insert, delete, update (locale, channel, language, value) on table product_value to app;
+grant
+    select,
+    insert (product, attribute, locale, channel, language, value),
+    update (locale, channel, language, value),
+    delete
+on table product_value to app;
+
 alter table product_value enable row level security;
-
--- covering pkey?
--- create index product_value_product on product_value (tenant, product);
--- create index product_value_channel on product_value (tenant, channel);
--- create index product_value_locale on product_value (tenant, locale);
--- create index product_value_attribute on product_value (attribute);
-
-create index product_value_fts on product_value
-using gin (to_tsvector(language, value))
-where jsonb_typeof(value) = 'string'
-and language is not null
-;
-
 create policy product_value_by_tenant
 on product_value
 to app
@@ -454,6 +352,32 @@ with check (exists(
     and case when a.localizable then product_value.locale <> '__all__' else product_value.locale = '__all__' end
 ));
 
+
+create function denomarlize_attribute_is_unique()
+returns trigger
+language plpgsql 
+security definer
+as $$
+begin
+    select is_unique from attribute where attribute = new.attribute into new.is_unique;
+    return new;
+end
+$$;
+create trigger denomarlize_attribute_is_unique
+before insert
+on product_value
+for each row
+when (new.is_unique is null)
+execute procedure denomarlize_attribute_is_unique();
+
+create unique index unique_attribute on product_value (tenant, attribute, locale, channel, value)
+where is_unique;
+
+create index product_value_fts on product_value
+using gin (to_tsvector(language, value))
+where jsonb_typeof(value) = 'string'
+and language is not null;
+
 create view inherited_product_value (tenant, product, attribute, locale, channel, language, value, ancestors)
 with (security_invoker)
 as select value.tenant, value.product, attribute, locale, channel, language, value, ancestors || p.product
@@ -464,13 +388,13 @@ where value.product = any(ancestors || p.product)
 
 grant select on table inherited_product_value to app;
 
-create view missing_value (tenant, product, descendants, attribute, channel, locale, to_complete)
+create view missing_value (tenant, via, product, attribute, channel, locale, to_complete)
 with (security_invoker)
-as select fha.tenant, p.product, pd.descendants, fha.attribute, c.channel, l.locale, fha.to_complete
+as select fha.tenant, p.product, pd.descendant, fha.attribute, c.channel, l.locale, fha.to_complete
 from channel c
 cross join locale l
 cross join product p
-join product_descendants pd using (product)
+left join product_descendant pd using (product)
 join family_has_attribute fha using (family)
 join attribute a using (attribute)
 left join product_value value
