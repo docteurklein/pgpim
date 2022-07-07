@@ -38,7 +38,10 @@ insert into family (family, parent)
 with recursive tree(family, parent, level) as (
     select 'family#' || i, null, 1 from generate_series(1, 5) i
     union all
-    select format('%s.%s', tree.family, j), tree.family, level + 1 from generate_series(1, 3) j, tree
+    select format('%s.%s', tree.family, j), tree.family, level + 1
+    from
+    tree,
+    generate_series(1, 3 - level) j
     where level < 3
 )
 select family, parent from tree;
@@ -80,7 +83,6 @@ select format('child %s of %s', random(), product), product, family_child.family
 from product
 join family using(family)
 join family family_child on family_child.parent = family.family
--- where family.parent is not null;
 ;
 
 commit;

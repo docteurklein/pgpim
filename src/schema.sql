@@ -201,7 +201,8 @@ create table product_descendants (
 );
 
 grant select on table product_descendants to app;
-create index product_by_descendants on product_descendants (tenant, product, descendants);
+-- create index product_by_descendants on product_descendants using gin (tenant, product, descendants); -- ERROR:  index row requires 146800 bytes, maximum size is 8191
+
 
 create function maintain_product_descendants_on_insert()
 returns trigger
@@ -264,7 +265,7 @@ begin
 
     delete from product_descendants pd
     using old_product
-    where pd.product = old_product.product;
+    where (pd.tenant, pd.product) = (old_product.tenant, old_product.product);
 
 
     return null;
