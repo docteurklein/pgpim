@@ -27,7 +27,7 @@ create or replace function sentence() returns text as $$
     select sentence from sentence tablesample bernoulli(1) limit 1
 $$ language sql volatile;
 
-set local role app;
+set local role to app;
 -- select set_config('app.tenant', 'tenant#1', true);
 
 insert into channel (channel) values ('ecommerce'), ('print');
@@ -47,12 +47,12 @@ with recursive tree(family, parent, level) as (
 select family, parent from tree;
 
 -- truncate attribute cascade;
-insert into attribute (attribute, type, scopable, localizable)
-select 'attribute#' || i, 'text', true, true
+insert into attribute (attribute, type, scopable, localizable, is_unique)
+select 'attribute#' || i, 'text', true, true, i % 3 = 0
 from generate_series(1, 10) i;
 
-insert into attribute (attribute, type, scopable, localizable)
-select 'parent attribute#' || i, 'text', false, false
+insert into attribute (attribute, type, scopable, localizable, is_unique)
+select 'parent attribute#' || i, 'text', false, false, i % 3 = 0
 from generate_series(1, 5) i;
 
 -- truncate family_has_attribute cascade;
@@ -90,7 +90,7 @@ begin;
 
 -- truncate product_value cascade;
 insert into product_value (product, attribute, locale, channel, language, value)
-select product, attribute, '__all__', '__all__', 'simple'::regconfig, to_jsonb('parent data: ' || coalesce(sentence(), 'default'))
+select product, attribute, '__all__', '__all__', 'simple'::regconfig, to_jsonb('parent data: ' || coalesce(sentence() || random(), random()::text))
 from product
 join family_has_attribute using (family)
 join family using (family)
@@ -104,7 +104,7 @@ commit;
 begin;
 
 insert into product_value (product, attribute, locale, channel, language, value)
-select product, attribute, locale, channel, 'simple'::regconfig, to_jsonb(coalesce(sentence(), 'default'))
+select product, attribute, locale, channel, 'simple'::regconfig, to_jsonb(coalesce(sentence() || random(), random()::text))
 from (values ('en_US'), ('de_DE')) locale (locale),
 (values ('ecommerce'), ('print')) channel (channel),
 product

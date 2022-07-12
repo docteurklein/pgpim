@@ -14,14 +14,14 @@ create domain netext as text constraint "non-empty text" check (value <> '');
 
 create table locale (
     tenant netext default current_setting('app.tenant', true),
-    locale netext,
+    locale netext not null,
     primary key (tenant, locale)
 );
 
 alter table locale enable row level security;
 create policy "see all" on locale for all to app using (true);
-create policy "keep __all__ on delete" on locale as restrictive for delete to app using (locale <> '__all__');
 create policy "keep __all__ on update" on locale as restrictive for update to app using (locale <> '__all__');
+create policy "keep __all__ on delete" on locale as restrictive for delete to app using (locale <> '__all__');
 
 grant select, insert, delete, update (locale) on table locale to app;
 
@@ -29,14 +29,14 @@ insert into locale (locale) values ('__all__'); -- equivalent to NULL
 
 create table channel (
     tenant netext default current_setting('app.tenant', true),
-    channel netext,
+    channel netext not null,
     primary key (tenant, channel)
 );
 
 alter table locale enable row level security;
 create policy "see all" on channel for all to app using (true);
-create policy "keep __all__ on delete" on channel as restrictive for delete to app using (channel <> '__all__');
 create policy "keep __all__ on update" on channel as restrictive for update to app using (channel <> '__all__');
+create policy "keep __all__ on delete" on channel as restrictive for delete to app using (channel <> '__all__');
 
 grant select, insert, delete, update (channel) on table channel to app;
 
@@ -44,8 +44,8 @@ insert into channel (channel) values ('__all__');
 
 create table family (
     tenant netext not null default current_setting('app.tenant', true),
-    family netext not null,
-    parent netext null,
+    family text not null,
+    parent text null,
     primary key (tenant, family),
     foreign key (tenant, parent) references family (tenant, family)
         on update cascade
@@ -87,7 +87,7 @@ grant select on table family_with_relatives to app;
 create table category (
     tenant netext not null default current_setting('app.tenant', true),
     category netext not null,
-    parent netext null,
+    parent text null,
     primary key (tenant, category),
     foreign key (tenant, parent) references category (tenant, category)
         on update cascade
@@ -113,7 +113,7 @@ from category_ancestry parent
 join category child on child.parent = parent.category;
 
 create table attribute (
-    attribute netext primary key,
+    attribute netext not null primary key,
     type netext not null,
     is_unique boolean not null,
     scopable boolean not null,
@@ -123,8 +123,8 @@ grant select, insert, delete, update (attribute, type) on table attribute to app
 
 create table family_has_attribute (
     tenant netext not null default current_setting('app.tenant', true),
-    family netext not null, -- not null, otherwise it's a draft
-    attribute netext not null,
+    family text not null, -- not null, otherwise it's a draft
+    attribute text not null,
     to_complete boolean not null,
     primary key (tenant, family, attribute),
     foreign key (tenant, family) references family (tenant, family)
@@ -164,8 +164,8 @@ with check (
 create table product (
     tenant netext not null default current_setting('app.tenant', true),
     product netext not null,
-    parent netext null,
-    family netext not null,
+    parent text null,
+    family text not null,
     primary key (tenant, product),
     foreign key (tenant, family) references family (tenant, family)
         on update cascade
@@ -257,22 +257,10 @@ join product child on child.parent = parent.product;
 
 grant select on table product_ancestry to app;
 
--- create materialized view product_with_relatives (tenant, product, parent, family, ancestors, descendants)
--- as select p.tenant, p.product, p.parent, p.family, descendant.ancestors, coalesce(
---     array_agg(descendant.product) filter (where descendant.product is not null),
---     '{}'
--- ) descendants
--- from product p
--- left join product_ancestry descendant on p.product = any(descendant.ancestors)
--- group by 1, 2, 3, 4, 5;
-
--- create unique index product_with_relatives_unique on product_with_relatives (tenant, product);
--- create index product_with_relatives_descendants on product_with_relatives (tenant, descendants);
-
 create table product_in_category (
     tenant netext not null default current_setting('app.tenant', true),
-    product netext not null,
-    category netext not null,
+    product text not null,
+    category text not null,
     primary key (tenant, product, category),
     foreign key (tenant, product) references product (tenant, product)
         on update cascade
@@ -292,15 +280,15 @@ using (tenant = current_setting('app.tenant', true));
 
 create table product_value (
     tenant netext not null default current_setting('app.tenant', true),
-    product netext not null,
-    attribute netext not null,
-    locale netext not null default '__all__',
-    channel netext not null default '__all__',
+    product text not null,
+    attribute text not null,
+    locale text not null default '__all__',
+    channel text not null default '__all__',
     language regconfig null,
     is_unique boolean not null,
     value jsonb not null,
     primary key (tenant, product, attribute, locale, channel), -- need __all__ instead of null
-    -- constraint "unique" unique nulls not distinct (tenant, product, attribute, locale, channel),
+    -- constraint "unique" unique nulls not distinct (tenant, product, attribute, locale, channel), -- cool, but no replica identity with NULL
     foreign key (tenant, channel) references channel (tenant, channel)
         on update cascade
         on delete cascade,
@@ -317,7 +305,7 @@ create table product_value (
 
 grant
     select,
-    insert (product, attribute, locale, channel, language, value),
+    insert (product, attribute, locale, channel, language, value), -- app role cannot decide if attribute is_unique
     update (locale, channel, language, value),
     delete
 on table product_value to app;
@@ -359,7 +347,7 @@ language plpgsql
 security definer
 as $$
 begin
-    select is_unique from attribute where attribute = new.attribute into new.is_unique;
+    select is_unique into strict new.is_unique from attribute where attribute = new.attribute;
     return new;
 end
 $$;
@@ -388,9 +376,9 @@ where value.product = any(ancestors || p.product)
 
 grant select on table inherited_product_value to app;
 
-create view missing_value (tenant, via, product, attribute, channel, locale, to_complete)
+create view product_value_form (tenant, product, via, attribute, channel, locale, to_complete, value)
 with (security_invoker)
-as select fha.tenant, p.product, pd.descendant, fha.attribute, c.channel, l.locale, fha.to_complete
+as select fha.tenant, coalesce(pd.descendant, p.product), p.product, fha.attribute, c.channel, l.locale, fha.to_complete, value
 from channel c
 cross join locale l
 cross join product p
@@ -402,11 +390,31 @@ left join product_value value
     and value.attribute = fha.attribute
     and value.channel = c.channel
     and value.locale = l.locale
-where value is null
-and case when a.scopable then c.channel <> '__all__' else c.channel = '__all__' end
+-- where value is null
+where case when a.scopable then c.channel <> '__all__' else c.channel = '__all__' end
 and case when a.localizable then l.locale <> '__all__' else l.locale = '__all__' end
 ;
 
-grant select on table missing_value to app;
+grant select on table product_value_form to app;
+
+create table hypermedia (
+    type netext not null,
+    action netext not null,
+    params jsonb not null
+);
+
+insert into hypermedia values
+    ('product', 'add', '{"product": null}'),
+    ('product', 'remove', '{"product": null}'),
+    ('product_value', 'edit', jsonb_build_object(
+        'product', '{"sql": "select product from product"}'::jsonb,
+        'attribute', '{"sql": "select attribute from attribute where attribute in $1", "params": ["product"]}'::jsonb,
+        'channel', '{"sql": "select channel from channel"}'::jsonb,
+        'locale', '{"sql": "select locale from locale"}'::jsonb,
+        'language', '{"sql": "select cfgname from pg_ts_config"}'::jsonb
+    ))
+;
+-- select * from "what" where "do" in ('the shadows');
+grant select on table hypermedia to app;
 
 commit;
