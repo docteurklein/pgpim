@@ -10,7 +10,11 @@ drop role if exists app;
 create role app;
 grant usage on schema pim to app;
 
-create domain netext as text constraint "non-empty text" check (value <> '');
+create domain netext as text constraint "non-empty text" check (trim(value) <> '');
+
+create table "user" (
+    
+);
 
 create table locale (
     tenant netext default current_setting('app.tenant', true),
@@ -119,7 +123,7 @@ create table attribute (
     scopable boolean not null,
     localizable boolean not null
 );
-grant select, insert, delete, update (attribute, type) on table attribute to app; -- 'update' allows possibly invalid product_value
+grant select, insert, delete, update (attribute) on table attribute to app; -- updating something else would invalidate product_value
 
 create table family_has_attribute (
     tenant netext not null default current_setting('app.tenant', true),
@@ -278,6 +282,23 @@ on product_in_category
 to app
 using (tenant = current_setting('app.tenant', true));
 
+create table select_option (
+    tenant netext not null default current_setting('app.tenant', true),
+    attribute text not null,
+    option netext not null,
+    primary key (tenant, attribute, option),
+    foreign key (attribute) references attribute (attribute)
+        on update cascade
+        on delete cascade
+);
+grant select, insert, delete, update on table select_option to app;
+alter table select_option enable row level security;
+
+create policy select_option_by_tenant
+on select_option
+to app
+using (tenant = current_setting('app.tenant', true));
+
 create table product_value (
     tenant netext not null default current_setting('app.tenant', true),
     product text not null,
@@ -340,6 +361,19 @@ with check (exists(
     and case when a.localizable then product_value.locale <> '__all__' else product_value.locale = '__all__' end
 ));
 
+create policy "valid select options"
+on product_value
+as restrictive
+for all
+to app
+with check (
+    not exists(select from attribute where attribute = product_value.attribute and type in ('select', 'multiselect'))
+    or (select product_value.value = to_jsonb(array_agg(option))
+    from select_option
+    where attribute = product_value.attribute
+    and value ? option
+    group by attribute
+));
 
 create function denomarlize_attribute_is_unique()
 returns trigger
@@ -363,8 +397,7 @@ where is_unique;
 
 create index product_value_fts on product_value
 using gin (to_tsvector(language, value))
-where jsonb_typeof(value) = 'string'
-and language is not null;
+where language is not null;
 
 create view inherited_product_value (tenant, product, attribute, locale, channel, language, value, ancestors)
 with (security_invoker)
@@ -376,9 +409,47 @@ where value.product = any(ancestors || p.product)
 
 grant select on table inherited_product_value to app;
 
-create view product_value_form (tenant, product, via, attribute, channel, locale, to_complete, value)
+create view product_form (
+    tenant,
+    product,
+    via,
+    attribute,
+    type,
+    channel,
+    locale,
+    is_unique,
+    to_complete,
+    language,
+    value
+)
 with (security_invoker)
-as select fha.tenant, coalesce(pd.descendant, p.product), p.product, fha.attribute, c.channel, l.locale, fha.to_complete, value
+as select
+    fha.tenant,
+    coalesce(pd.descendant, p.product),
+    p.product,
+    fha.attribute,
+    type,
+    jsonb_build_object(
+        'value', c.channel,
+        'in', 'select channel from channel'
+    ),
+    jsonb_build_object(
+        'value', l.locale,
+        'in', 'select locale from locale'
+    ),
+    a.is_unique,
+    fha.to_complete,
+    jsonb_build_object(
+        'value', language,
+        'in', 'select cfgname from pg_ts_config'
+    ),
+    jsonb_build_object(
+        'value', value,
+        'in', case
+	    when a.type in ('select', 'multiselect')
+                then format('select option from select_option where attribute = %L', a.attribute)
+        end
+    )
 from channel c
 cross join locale l
 cross join product p
@@ -390,31 +461,14 @@ left join product_value value
     and value.attribute = fha.attribute
     and value.channel = c.channel
     and value.locale = l.locale
--- where value is null
-where case when a.scopable then c.channel <> '__all__' else c.channel = '__all__' end
-and case when a.localizable then l.locale <> '__all__' else l.locale = '__all__' end
+where case when a.scopable
+    then c.channel <> '__all__'
+    else c.channel = '__all__' end
+and case when a.localizable
+    then l.locale <> '__all__'
+    else l.locale = '__all__' end
 ;
 
-grant select on table product_value_form to app;
-
-create table hypermedia (
-    type netext not null,
-    action netext not null,
-    params jsonb not null
-);
-
-insert into hypermedia values
-    ('product', 'add', '{"product": null}'),
-    ('product', 'remove', '{"product": null}'),
-    ('product_value', 'edit', jsonb_build_object(
-        'product', '{"sql": "select product from product"}'::jsonb,
-        'attribute', '{"sql": "select attribute from attribute where attribute in $1", "params": ["product"]}'::jsonb,
-        'channel', '{"sql": "select channel from channel"}'::jsonb,
-        'locale', '{"sql": "select locale from locale"}'::jsonb,
-        'language', '{"sql": "select cfgname from pg_ts_config"}'::jsonb
-    ))
-;
--- select * from "what" where "do" in ('the shadows');
-grant select on table hypermedia to app;
+grant select on table product_form to app;
 
 commit;

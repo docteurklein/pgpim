@@ -17,7 +17,8 @@ insert into attribute (attribute, type, is_unique, scopable, localizable) values
 ('color', 'text', false, false, false),
 ('flashy', 'bool', false, false, false),
 ('EAN', 'text', true, false, false),
-('size', 'number', false, false, false)
+('UPC', 'text', true, false, false),
+('size', 'select', false, false, false)
 ;
 
 insert into family (family, parent) values
@@ -28,6 +29,7 @@ insert into family (family, parent) values
 
 insert into family_has_attribute (family, attribute, to_complete) values
 ('shoe', 'EAN', true),
+('shoe', 'UPC', true),
 ('shoe', 'description', true),
 ('shoe', 'image', true),
 ('shoe', 'seo', false),
@@ -61,15 +63,23 @@ insert into product (product, parent, family) values
         -- ('nike air max red 29', 'nike air max red', 'shoe by size');
 ;
 
+insert into select_option (attribute, option) values
+('size', '13'),
+('size', '14'),
+('size', '15');
+
 insert into product_value (product, attribute, channel, locale, value) values
 ('nike air max', 'description', 'ecommerce', 'en_US', to_jsonb(text 'Nice shoes')),
 ('nike air max', 'description', 'mobile', 'en_US', to_jsonb(text 'Nice!')),
 ('nike air max', 'description', 'ecommerce', 'fr_FR', to_jsonb(text 'Belles chaussures')),
+('nike air max', 'UPC', '__all__', '__all__', to_jsonb(text 'UPC1')),
+('adidas', 'UPC', '__all__', '__all__', to_jsonb(text 'UPC2')),
+('adidas', 'EAN', '__all__', '__all__', to_jsonb(text 'EAN2')),
 -- ('nike air max', 'description', 'ecommerce', 'de_DE', to_jsonb(text 'Schöne Schuhe')),
 ('nike air max', 'image', 'ecommerce', 'en_US', to_jsonb(text 'https://example.org/nike-air-max.png')),
 ('nike air max', 'image', 'ecommerce', 'fr_FR', to_jsonb(text 'https://example.org/nike-air-max.png')),
     ('nike air max red', 'color', '__all__', '__all__', to_jsonb(text 'blue')),
-        ('nike air max red 13', 'size', '__all__', '__all__', to_jsonb(13))
+        ('nike air max red 13', 'size', '__all__', '__all__', to_jsonb(array['13', '15']))
 ;
 commit;
 vacuum analyze;

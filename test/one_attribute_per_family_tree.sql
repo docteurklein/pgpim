@@ -2,7 +2,7 @@ do $it$
 begin
     set local search_path to pim;
 
-    perform notice(text 'attribute appears only once in family tree');
+    raise notice 'attribute appears only once in family tree';
 
     set local role to app;
     set local "app.tenant" to 'tenant#1';

@@ -73,13 +73,13 @@ begin;
 
 -- truncate product cascade;
 insert into product (product, parent, family)
-select format('product#%s of %s', i, family), null, family
-from generate_series(1, 500) i,
+select format('product#%s', random()), null, family
+from generate_series(1, 50) i,
 family
 where family.parent is null;
 
 insert into product (product, parent, family)
-select format('child %s of %s', random(), product), product, family_child.family
+select format('child %s', random()), product, family_child.family
 from product
 join family using(family)
 join family family_child on family_child.parent = family.family
