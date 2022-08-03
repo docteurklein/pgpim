@@ -18,9 +18,12 @@ create table "user" (
 
 create table locale (
     tenant netext default current_setting('app.tenant', true),
-    locale netext not null,
+    locale netext,
+    visible boolean not null default true,
     primary key (tenant, locale)
 );
+
+grant select, insert (locale, visible), update (locale, visible) on table locale to app;
 
 alter table locale enable row level security;
 create policy "see all" on locale for all to app using (true);
@@ -29,11 +32,11 @@ create policy "keep __all__ on delete" on locale as restrictive for delete to ap
 
 grant select, insert, delete, update (locale) on table locale to app;
 
-insert into locale (locale) values ('__all__'); -- equivalent to NULL
+insert into locale (locale, visible) values ('__all__', false); -- equivalent to NULL
 
 create table channel (
     tenant netext default current_setting('app.tenant', true),
-    channel netext not null,
+    channel netext,
     primary key (tenant, channel)
 );
 
@@ -47,7 +50,7 @@ grant select, insert, delete, update (channel) on table channel to app;
 insert into channel (channel) values ('__all__');
 
 create table family (
-    tenant netext not null default current_setting('app.tenant', true),
+    tenant netext default current_setting('app.tenant', true),
     family text not null,
     parent text null,
     primary key (tenant, family),
@@ -89,8 +92,8 @@ group by 1, 2, 3, 4, 5;
 grant select on table family_with_relatives to app;
 
 create table category (
-    tenant netext not null default current_setting('app.tenant', true),
-    category netext not null,
+    tenant netext default current_setting('app.tenant', true),
+    category netext,
     parent text null,
     primary key (tenant, category),
     foreign key (tenant, parent) references category (tenant, category)
@@ -117,8 +120,8 @@ from category_ancestry parent
 join category child on child.parent = parent.category;
 
 create table attribute (
-    attribute netext not null primary key,
-    type netext not null,
+    attribute netext primary key,
+    type netext,
     is_unique boolean not null,
     scopable boolean not null,
     localizable boolean not null
@@ -126,7 +129,7 @@ create table attribute (
 grant select, insert, delete, update (attribute) on table attribute to app; -- updating something else would invalidate product_value
 
 create table family_has_attribute (
-    tenant netext not null default current_setting('app.tenant', true),
+    tenant netext default current_setting('app.tenant', true),
     family text not null, -- not null, otherwise it's a draft
     attribute text not null,
     to_complete boolean not null,
@@ -166,8 +169,8 @@ with check (
 );
 
 create table product (
-    tenant netext not null default current_setting('app.tenant', true),
-    product netext not null,
+    tenant netext default current_setting('app.tenant', true),
+    product netext,
     parent text null,
     family text not null,
     primary key (tenant, product),
@@ -178,7 +181,7 @@ create table product (
         on update cascade
         on delete cascade deferrable
 );
-grant select, insert, delete, update (product) on table product to app; -- updating parent or family would break product_descendant and policies about family and product_value
+grant select, insert, delete, update (product) on table product to app; -- updating parent or family would break policies
 alter table product enable row level security;
 
 create index product_parent on product (tenant, parent);
@@ -205,7 +208,7 @@ with check (
 );
 
 create table product_descendant (
-    tenant netext not null,
+    tenant netext,
     product text not null,
     descendant text not null,
     primary key (tenant, product, descendant),
@@ -220,7 +223,7 @@ create table product_descendant (
 grant select on table product_descendant to app;
 
 
-create function maintain_product_descendants_on_insert()
+create function maintain_product_descendants()
 returns trigger
 language plpgsql 
 security definer
@@ -242,12 +245,12 @@ begin
     return null;
 end
 $$;
-create trigger maintain_product_descendants_on_insert
+create trigger maintain_product_descendants
 after insert
 on product
 referencing new table as new_product
 for each statement
-execute procedure maintain_product_descendants_on_insert();
+execute procedure maintain_product_descendants();
 
 create recursive view product_ancestry (tenant, product, parent, family, level, ancestors)
 with (security_invoker)
@@ -262,7 +265,7 @@ join product child on child.parent = parent.product;
 grant select on table product_ancestry to app;
 
 create table product_in_category (
-    tenant netext not null default current_setting('app.tenant', true),
+    tenant netext default current_setting('app.tenant', true),
     product text not null,
     category text not null,
     primary key (tenant, product, category),
@@ -283,9 +286,9 @@ to app
 using (tenant = current_setting('app.tenant', true));
 
 create table select_option (
-    tenant netext not null default current_setting('app.tenant', true),
+    tenant netext default current_setting('app.tenant', true),
     attribute text not null,
-    option netext not null,
+    option netext,
     primary key (tenant, attribute, option),
     foreign key (attribute) references attribute (attribute)
         on update cascade
@@ -300,7 +303,7 @@ to app
 using (tenant = current_setting('app.tenant', true));
 
 create table product_value (
-    tenant netext not null default current_setting('app.tenant', true),
+    tenant netext default current_setting('app.tenant', true),
     product text not null,
     attribute text not null,
     locale text not null default '__all__',
