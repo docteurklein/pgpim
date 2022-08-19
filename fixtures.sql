@@ -1,4 +1,5 @@
 \set ON_ERROR_STOP on
+\timing on
 
 set search_path to pim;
 

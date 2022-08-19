@@ -6,6 +6,8 @@ drop schema if exists pim cascade;
 create schema pim;
 set local search_path to pim;
 
+create extension pg_trgm;
+
 drop role if exists app;
 create role app;
 grant usage on schema pim to app;
@@ -19,9 +21,12 @@ create table "user" (
 create table locale (
     tenant netext default current_setting('app.tenant', true),
     locale netext,
+    labels jsonb not null default '{}',
     visible boolean not null default true,
     primary key (tenant, locale)
 );
+
+create index locale_labels on locale using gin (to_tsvector('simple', labels));
 
 grant select, insert (locale, visible), update (locale, visible) on table locale to app;
 
@@ -30,13 +35,14 @@ create policy "see all" on locale for all to app using (true);
 create policy "keep __all__ on update" on locale as restrictive for update to app using (locale <> '__all__');
 create policy "keep __all__ on delete" on locale as restrictive for delete to app using (locale <> '__all__');
 
-grant select, insert, delete, update (locale) on table locale to app;
+grant select, insert, delete, update (locale, labels) on table locale to app;
 
 insert into locale (locale, visible) values ('__all__', false); -- equivalent to NULL
 
 create table channel (
     tenant netext default current_setting('app.tenant', true),
     channel netext,
+    labels jsonb not null default '{}',
     primary key (tenant, channel)
 );
 
@@ -45,13 +51,14 @@ create policy "see all" on channel for all to app using (true);
 create policy "keep __all__ on update" on channel as restrictive for update to app using (channel <> '__all__');
 create policy "keep __all__ on delete" on channel as restrictive for delete to app using (channel <> '__all__');
 
-grant select, insert, delete, update (channel) on table channel to app;
+grant select, insert, delete, update (channel, labels) on table channel to app;
 
 insert into channel (channel) values ('__all__');
 
 create table family (
     tenant netext default current_setting('app.tenant', true),
     family text not null,
+    labels jsonb not null default '{}',
     parent text null,
     primary key (tenant, family),
     foreign key (tenant, parent) references family (tenant, family)
@@ -59,7 +66,7 @@ create table family (
         on delete cascade deferrable
 );
 
-grant select, insert, delete, update (family) on table family to app; -- changing parent would break product constraints
+grant select, insert, delete, update (family, labels) on table family to app; -- changing parent would break product constraints
 alter table family enable row level security;
 
 create policy family_by_tenant
@@ -94,6 +101,7 @@ grant select on table family_with_relatives to app;
 create table category (
     tenant netext default current_setting('app.tenant', true),
     category netext,
+    labels jsonb not null default '{}',
     parent text null,
     primary key (tenant, category),
     foreign key (tenant, parent) references category (tenant, category)
@@ -101,7 +109,7 @@ create table category (
         on delete cascade deferrable
 );
 
-grant select, insert, delete, update (category, parent) on table category to app;
+grant select, insert, delete, update (category, labels, parent) on table category to app;
 alter table category enable row level security;
 
 create policy category_by_tenant
@@ -120,13 +128,23 @@ from category_ancestry parent
 join category child on child.parent = parent.category;
 
 create table attribute (
-    attribute netext primary key,
+    tenant netext default current_setting('app.tenant', true),
+    attribute netext,
+    labels jsonb not null default '{}',
     type netext,
     is_unique boolean not null,
     scopable boolean not null,
-    localizable boolean not null
+    localizable boolean not null,
+    primary key (tenant, attribute)
+    -- constraint "no unique for select" check (case when type in ('select', 'multiselect') then not is_unique else true end)
 );
-grant select, insert, delete, update (attribute) on table attribute to app; -- updating something else would invalidate product_value
+grant select, insert, delete, update (attribute, labels) on table attribute to app; -- updating something else would invalidate product_value
+
+alter table attribute enable row level security;
+
+create policy attribute_by_tenant
+on attribute for all to app
+using (tenant = current_setting('app.tenant', true));
 
 create table family_has_attribute (
     tenant netext default current_setting('app.tenant', true),
@@ -137,7 +155,7 @@ create table family_has_attribute (
     foreign key (tenant, family) references family (tenant, family)
         on update cascade
         on delete cascade,
-    foreign key (attribute) references attribute (attribute)
+    foreign key (tenant, attribute) references attribute (tenant, attribute)
         on update cascade
         on delete cascade
 );
@@ -222,6 +240,12 @@ create table product_descendant (
 
 grant select on table product_descendant to app;
 
+alter table product_descendant enable row level security;
+
+create policy product_descendant_by_tenant
+on product_descendant
+to app
+using (tenant = current_setting('app.tenant', true));
 
 create function maintain_product_descendants()
 returns trigger
@@ -245,6 +269,7 @@ begin
     return null;
 end
 $$;
+
 create trigger maintain_product_descendants
 after insert
 on product
@@ -289,8 +314,9 @@ create table select_option (
     tenant netext default current_setting('app.tenant', true),
     attribute text not null,
     option netext,
+    labels jsonb not null default '{}',
     primary key (tenant, attribute, option),
-    foreign key (attribute) references attribute (attribute)
+    foreign key (tenant, attribute) references attribute (tenant, attribute)
         on update cascade
         on delete cascade
 );
@@ -302,6 +328,19 @@ on select_option
 to app
 using (tenant = current_setting('app.tenant', true));
 
+create policy "select options are for (multi)select attributes only"
+on select_option
+as restrictive
+for all
+to app
+with check (
+    exists(
+        select from attribute
+        where attribute = select_option.attribute
+        and type in ('select', 'multiselect')
+    )
+);
+
 create table product_value (
     tenant netext default current_setting('app.tenant', true),
     product text not null,
@@ -309,6 +348,7 @@ create table product_value (
     locale text not null default '__all__',
     channel text not null default '__all__',
     language regconfig null,
+    type netext,
     is_unique boolean not null,
     value jsonb not null,
     primary key (tenant, product, attribute, locale, channel), -- need __all__ instead of null
@@ -322,14 +362,14 @@ create table product_value (
     foreign key (tenant, product) references product (tenant, product)
         on update cascade
         on delete cascade,
-    foreign key (attribute) references attribute (attribute)
+    foreign key (tenant, attribute) references attribute (tenant, attribute)
         on update cascade
         on delete cascade
 );
 
 grant
     select,
-    insert (product, attribute, locale, channel, language, value), -- app role cannot decide if attribute is_unique
+    insert (product, attribute, locale, channel, language, value), -- app role cannot decide attribute's is_unique or type
     update (locale, channel, language, value),
     delete
 on table product_value to app;
@@ -346,10 +386,9 @@ as restrictive
 for insert
 to app
 with check (exists(
-    with product_family as (select family from product where product = product_value.product)
     select from family_has_attribute fha
-    join product_family using (family)
     where fha.attribute = product_value.attribute
+    and fha.family = (select family from product where product = product_value.product)
 ));
 
 create policy "has channel/locale if attribute is scopable/localizable"
@@ -364,36 +403,44 @@ with check (exists(
     and case when a.localizable then product_value.locale <> '__all__' else product_value.locale = '__all__' end
 ));
 
-create policy "valid select options"
-on product_value
-as restrictive
-for all
-to app
-with check (
-    not exists(select from attribute where attribute = product_value.attribute and type in ('select', 'multiselect'))
-    or (select product_value.value = to_jsonb(array_agg(option))
-    from select_option
-    where attribute = product_value.attribute
-    and value ? option
-    group by attribute
-));
-
-create function denomarlize_attribute_is_unique()
+create function denormarlize_attribute()
 returns trigger
 language plpgsql 
 security definer
 as $$
 begin
-    select is_unique into strict new.is_unique from attribute where attribute = new.attribute;
+    select is_unique, type into strict new.is_unique, new.type from attribute where attribute = new.attribute;
     return new;
 end
 $$;
-create trigger denomarlize_attribute_is_unique
-before insert
+
+create trigger denormarlize_attribute
+before insert on product_value for each row when (new.is_unique is null)
+execute procedure denormarlize_attribute();
+
+create function check_select_options()
+returns trigger
+language plpgsql 
+parallel safe
+security definer
+as $$
+begin
+    assert jsonb_agg(option) = case when new.type = 'select' then to_jsonb(array[new.value]) else new.value end
+        from select_option
+        where new.value ? option
+        and new.attribute = attribute
+    , format('invalid option in %L', new.value);
+    return new;
+end
+$$;
+
+create constraint trigger check_select_options
+after insert or update of value
 on product_value
-for each row
-when (new.is_unique is null)
-execute procedure denomarlize_attribute_is_unique();
+from select_option
+deferrable
+for each row when (new.type in ('select', 'multiselect'))
+execute procedure check_select_options();
 
 create unique index unique_attribute on product_value (tenant, attribute, locale, channel, value)
 where is_unique;
@@ -427,14 +474,14 @@ create view product_form (
 )
 with (security_invoker)
 as select
-    fha.tenant,
+    p.tenant,
     coalesce(pd.descendant, p.product),
     p.product,
     fha.attribute,
-    type,
+    a.type,
     jsonb_build_object(
         'value', c.channel,
-        'in', 'select channel from channel'
+        'sql', case when a.localizable then 'select channel from channel' end
     ),
     jsonb_build_object(
         'value', l.locale,
@@ -444,19 +491,39 @@ as select
     fha.to_complete,
     jsonb_build_object(
         'value', language,
-        'in', 'select cfgname from pg_ts_config'
+        'in', $sql$
+            select cfgname from pg_ts_config
+            where case when $1 is not null then cfgname ilike concat('%', $1, '%') else true end
+        $sql$,
+        'args', array['language']
     ),
     jsonb_build_object(
         'value', value,
         'in', case
 	    when a.type in ('select', 'multiselect')
-                then format('select option from select_option where attribute = %L', a.attribute)
-        end
+                then format($sql$
+                    select option from select_option
+                    where attribute = %L
+                    and case when $1 is not null then option ilike concat('%', $1, '%') else true end
+                $sql$,
+                a.attribute
+            )
+        end,
+        'args', array['value'],
+        'edit', jsonb_build_object(
+            'sql', $sql$
+                insert into product_value (product, attribute, channel, locale, language, value) values ($1, $2, $3, $4, $5, $6)
+                on conflict (tenant, product, attribute, channel, locale) do update
+                set language = excluded.language,
+                value = excluded.value
+            $sql$,
+            'args', array['product', 'attribute', 'channel', 'locale', 'language', 'value']
+        )
     )
-from channel c
-cross join locale l
-cross join product p
+from product p
 left join product_descendant pd using (product)
+cross join locale l
+cross join channel c
 join family_has_attribute fha using (family)
 join attribute a using (attribute)
 left join product_value value

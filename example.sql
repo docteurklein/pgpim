@@ -7,18 +7,22 @@ set local search_path to pim;
 set local role to app; -- rls compliant :)
 
 insert into channel (channel) values ('ecommerce'), ('mobile');
-insert into locale (locale) values ('fr_FR'), ('de_DE'), ('en_US');
+insert into locale (locale, labels) values
+    ('fr_FR', jsonb_build_object('en_US', 'French', 'fr_FR', 'Français')),
+    ('de_DE', jsonb_build_object('en_US', 'German', 'de_DE', 'Deutsch')),
+    ('en_US', '{}');
 
 insert into attribute (attribute, type, is_unique, scopable, localizable) values
 ('description', 'text', false, true, true),
-('image', 'image', false, true, true),
+('image', 'url', false, true, true),
 ('seo', 'text', false, true, true),
 ('dimension', 'text', false, true, true),
 ('color', 'text', false, false, false),
 ('flashy', 'bool', false, false, false),
 ('EAN', 'text', true, false, false),
 ('UPC', 'text', true, false, false),
-('size', 'select', false, false, false)
+('size', 'select', false, false, false),
+('styles', 'multiselect', false, false, false)
 ;
 
 insert into family (family, parent) values
@@ -29,6 +33,7 @@ insert into family (family, parent) values
 
 insert into family_has_attribute (family, attribute, to_complete) values
 ('shoe', 'EAN', true),
+('shoe', 'styles', false),
 ('shoe', 'UPC', true),
 ('shoe', 'description', true),
 ('shoe', 'image', true),
@@ -68,8 +73,14 @@ insert into select_option (attribute, option) values
 ('size', '14'),
 ('size', '15');
 
+insert into select_option (attribute, option) values
+('styles', 'sport'),
+('styles', 'music'),
+('styles', 'nature');
+
 insert into product_value (product, attribute, channel, locale, value) values
 ('nike air max', 'description', 'ecommerce', 'en_US', to_jsonb(text 'Nice shoes')),
+('nike air max', 'styles', '__all__', '__all__', to_jsonb(array['sport', 'music'])),
 ('nike air max', 'description', 'mobile', 'en_US', to_jsonb(text 'Nice!')),
 ('nike air max', 'description', 'ecommerce', 'fr_FR', to_jsonb(text 'Belles chaussures')),
 ('nike air max', 'UPC', '__all__', '__all__', to_jsonb(text 'UPC1')),
@@ -79,7 +90,16 @@ insert into product_value (product, attribute, channel, locale, value) values
 ('nike air max', 'image', 'ecommerce', 'en_US', to_jsonb(text 'https://example.org/nike-air-max.png')),
 ('nike air max', 'image', 'ecommerce', 'fr_FR', to_jsonb(text 'https://example.org/nike-air-max.png')),
     ('nike air max red', 'color', '__all__', '__all__', to_jsonb(text 'blue')),
-        ('nike air max red 13', 'size', '__all__', '__all__', to_jsonb(array['13', '15']))
+        ('nike air max red 13', 'size', '__all__', '__all__', to_jsonb(text '13'))
 ;
+
+-- insert into product_value_has_option (product, attribute, channel, locale, option) values
+-- ('nike air max', 'styles', '__all__', '__all__', 'sport'),
+-- ('nike air max', 'styles', '__all__', '__all__', 'music');
+-- 
+-- insert into product_value_has_option (product, attribute, channel, locale, option) values
+-- ('nike air max red 13', 'size', '__all__', '__all__', '13'),
+-- ('nike air max red 13', 'size', '__all__', '__all__', '15');
+
 commit;
 vacuum analyze;
