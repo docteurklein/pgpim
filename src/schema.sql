@@ -6,7 +6,7 @@ drop schema if exists pim cascade;
 create schema pim;
 set local search_path to pim;
 
-create extension pg_trgm;
+create extension if not exists pg_trgm schema public;
 
 drop role if exists app;
 create role app;
@@ -136,7 +136,6 @@ create table attribute (
     scopable boolean not null,
     localizable boolean not null,
     primary key (tenant, attribute)
-    -- constraint "no unique for select" check (case when type in ('select', 'multiselect') then not is_unique else true end)
 );
 grant select, insert, delete, update (attribute, labels) on table attribute to app; -- updating something else would invalidate product_value
 
@@ -250,6 +249,7 @@ using (tenant = current_setting('app.tenant', true));
 create function maintain_product_descendants()
 returns trigger
 language plpgsql 
+set search_path to pim, pg_catalog
 security definer
 as $$
 begin
@@ -270,12 +270,12 @@ begin
 end
 $$;
 
-create trigger maintain_product_descendants
+create trigger "1: maintain_product_descendants"
 after insert
 on product
 referencing new table as new_product
 for each statement
-execute procedure maintain_product_descendants();
+execute function maintain_product_descendants();
 
 create recursive view product_ancestry (tenant, product, parent, family, level, ancestors)
 with (security_invoker)
@@ -320,7 +320,7 @@ create table select_option (
         on update cascade
         on delete cascade
 );
-grant select, insert, delete, update on table select_option to app;
+grant select, insert, delete, update (option, labels) on table select_option to app;
 alter table select_option enable row level security;
 
 create policy select_option_by_tenant
@@ -331,7 +331,7 @@ using (tenant = current_setting('app.tenant', true));
 create policy "select options are for (multi)select attributes only"
 on select_option
 as restrictive
-for all
+for insert
 to app
 with check (
     exists(
@@ -347,7 +347,7 @@ create table product_value (
     attribute text not null,
     locale text not null default '__all__',
     channel text not null default '__all__',
-    language regconfig null,
+    language text null,
     type netext,
     is_unique boolean not null,
     value jsonb not null,
@@ -406,21 +406,27 @@ with check (exists(
 create function denormarlize_attribute()
 returns trigger
 language plpgsql 
+set search_path to pim, pg_catalog
 security definer
 as $$
 begin
-    select is_unique, type into strict new.is_unique, new.type from attribute where attribute = new.attribute;
+    select is_unique, type
+    into strict new.is_unique, new.type
+    from attribute
+    where attribute = new.attribute;
     return new;
 end
 $$;
 
-create trigger denormarlize_attribute
-before insert on product_value for each row when (new.is_unique is null)
-execute procedure denormarlize_attribute();
+create trigger "1: denormarlize_attribute"
+before insert on product_value
+for each row when (new.is_unique is null)
+execute function denormarlize_attribute();
 
 create function check_select_options()
 returns trigger
 language plpgsql 
+set search_path to pim, pg_catalog
 parallel safe
 security definer
 as $$
@@ -429,24 +435,30 @@ begin
         from select_option
         where new.value ? option
         and new.attribute = attribute
-    , format('invalid option in %L', new.value);
+    , format('invalid option in %L for attribute %L', new.value, new.attribute);
     return new;
 end
 $$;
 
-create constraint trigger check_select_options
+create constraint trigger "2: check_select_options"
 after insert or update of value
 on product_value
 from select_option
 deferrable
 for each row when (new.type in ('select', 'multiselect'))
-execute procedure check_select_options();
+execute function check_select_options();
 
 create unique index unique_attribute on product_value (tenant, attribute, locale, channel, value)
 where is_unique;
 
+create function ts_lang(text) returns regconfig
+immutable strict
+begin atomic;
+select coalesce((select cfgname::regconfig from pg_ts_config where cfgname = $1), 'simple')::regconfig;
+end;
+
 create index product_value_fts on product_value
-using gin (to_tsvector(language, value))
+using gin (to_tsvector(ts_lang(language), value))
 where language is not null;
 
 create view inherited_product_value (tenant, product, attribute, locale, channel, language, value, ancestors)
@@ -499,21 +511,23 @@ as select
     ),
     jsonb_build_object(
         'value', value,
-        'in', case
-	    when a.type in ('select', 'multiselect')
+        'in', jsonb_build_object(
+            'sql', case when a.type in ('select', 'multiselect')
                 then format($sql$
                     select option from select_option
                     where attribute = %L
-                    and case when $1 is not null then option ilike concat('%', $1, '%') else true end
+                    and case when $1 is not null then option ilike concat('%%', $1, '%%') else true end
                 $sql$,
-                a.attribute
-            )
-        end,
-        'args', array['value'],
+                a.attribute)
+            end,
+            'args', array['value']
+        ),
         'edit', jsonb_build_object(
             'sql', $sql$
-                insert into product_value (product, attribute, channel, locale, language, value) values ($1, $2, $3, $4, $5, $6)
-                on conflict (tenant, product, attribute, channel, locale) do update
+                insert into product_value (product, attribute, channel, locale, language, value)
+                values ($1, $2, $3, $4, $5, $6)
+                on conflict (tenant, product, attribute, channel, locale)
+                do update
                 set language = excluded.language,
                 value = excluded.value
             $sql$,

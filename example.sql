@@ -78,19 +78,19 @@ insert into select_option (attribute, option) values
 ('styles', 'music'),
 ('styles', 'nature');
 
-insert into product_value (product, attribute, channel, locale, value) values
-('nike air max', 'description', 'ecommerce', 'en_US', to_jsonb(text 'Nice shoes')),
-('nike air max', 'styles', '__all__', '__all__', to_jsonb(array['sport', 'music'])),
-('nike air max', 'description', 'mobile', 'en_US', to_jsonb(text 'Nice!')),
-('nike air max', 'description', 'ecommerce', 'fr_FR', to_jsonb(text 'Belles chaussures')),
-('nike air max', 'UPC', '__all__', '__all__', to_jsonb(text 'UPC1')),
-('adidas', 'UPC', '__all__', '__all__', to_jsonb(text 'UPC2')),
-('adidas', 'EAN', '__all__', '__all__', to_jsonb(text 'EAN2')),
+insert into product_value (product, attribute, channel, locale, language, value) values
+('nike air max', 'description', 'ecommerce', 'en_US', 'italian', to_jsonb(text 'Nice shoes')),
+('nike air max', 'styles', '__all__', '__all__', null, to_jsonb(array['sport', 'music'])),
+('nike air max', 'description', 'mobile', 'en_US', 'english', to_jsonb(text 'Nice!')),
+('nike air max', 'description', 'ecommerce', 'fr_FR', 'french', to_jsonb(text 'Belles chaussures')),
+('nike air max', 'UPC', '__all__', '__all__', null, to_jsonb(text 'UPC1')),
+('adidas', 'UPC', '__all__', '__all__', null, to_jsonb(text 'UPC2')),
+('adidas', 'EAN', '__all__', '__all__', null, to_jsonb(text 'EAN2')),
 -- ('nike air max', 'description', 'ecommerce', 'de_DE', to_jsonb(text 'Schöne Schuhe')),
-('nike air max', 'image', 'ecommerce', 'en_US', to_jsonb(text 'https://example.org/nike-air-max.png')),
-('nike air max', 'image', 'ecommerce', 'fr_FR', to_jsonb(text 'https://example.org/nike-air-max.png')),
-    ('nike air max red', 'color', '__all__', '__all__', to_jsonb(text 'blue')),
-        ('nike air max red 13', 'size', '__all__', '__all__', to_jsonb(text '13'))
+('nike air max', 'image', 'ecommerce', 'en_US', null, to_jsonb(text 'https://example.org/nike-air-max.png')),
+('nike air max', 'image', 'ecommerce', 'fr_FR', null, to_jsonb(text 'https://example.org/nike-air-max.png')),
+    ('nike air max red', 'color', '__all__', '__all__', null, to_jsonb(text 'blue')),
+        ('nike air max red 13', 'size', '__all__', '__all__', null, to_jsonb(text '13'))
 ;
 
 -- insert into product_value_has_option (product, attribute, channel, locale, option) values
