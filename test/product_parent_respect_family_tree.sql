@@ -2,7 +2,7 @@ do $it$
 begin
     set local search_path to pim;
 
-    perform public.notice(text 'product''s parent respect family tree');
+    raise notice '%', 'product''s parent respect family tree';
 
     set local role to app;
     set local "app.tenant" to 'tenant#1';

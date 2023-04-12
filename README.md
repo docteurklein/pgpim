@@ -1,71 +1,35 @@
+#pgpim
+
+## install
 ```
-dcu
-dce -T mysql mysql -uroot -proot <<< 'create database pim_1'
-dce -T mysql mysql -uroot -proot pim_1 < sql/mysql.sql
-
-psql -h 0 -U postgres -c "select set_config('app.tenant', 'tenant#1', false)" -c 'select setseed(0.1)' -a -f src/schema.sql -f fixtures.sql
-
-curl --request POST --url 0:8083/connectors --header 'Content-Type: application/json' --data @- << EOF
-{
-  "name": "$pim_name-source",
-  "config": {
-    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
-    "tasks.max": "1",
-    "database.hostname": "mysql",
-    "database.port": "3306",
-    "database.user": "root",
-    "database.password": "root",
-    "database.server.id": "100001",
-    "database.server.name": "$pim_name",
-    "database.include.list": "$pim_name",
-    "database.history.kafka.bootstrap.servers": "redpanda:9092",
-    "database.history.kafka.topic": "schema-changes.$pim_name",
-    "database.allowPublicKeyRetrieval": true,
-    "transforms": "Reroute",
-    "transforms.Reroute.type": "io.debezium.transforms.ByLogicalTableRouter",
-    "transforms.Reroute.topic.regex": "^$pim_name\\\.$pim_name\\\.(.*)$",
-    "transforms.Reroute.topic.replacement": "all_pims",
-    "transforms.Reroute.key.field.name": "tenant",
-    "transforms.Reroute.key.field.regex": ".*",
-    "transforms.Reroute.key.field.replacement": "$pim_name"
-  }
-}
-EOF
+psql -c "set app.tenant to 'tenant#1'"  -f src/schema.sql -f example.sql
 ```
 
+## tests
 ```
-curl --request POST --url 0:8083/connectors --header 'Content-Type: application/json' --data @- << EOF
-{
-    "name": "postgres-sink",
-    "config": {
-        "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
-        "tasks.max": "1",
-        "topics": "all_pims",
-        "connection.url": "jdbc:postgresql://postgres:5432/pim?user=postgres&password=postgres",
-        "transforms": "unwrap",
-        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
-        "transforms.unwrap.drop.tombstones": "false",
-        "auto.create": "true",
-        "insert.mode": "upsert",
-        "delete.enabled": "true",
-        "pk.fields": "id,tenant",
-        "pk.mode": "record_key"
-    }
-}
-EOF
+find test -name '*.sql' -printf '%h/%f\n' | sort -V | xargs psql -f
 ```
 
-## queries
 
-### get missing values for a given product/channel/locale, and where in the product tree
+## whatever
 
-```sql
-select *
-from missing_value
-where 'nike air max red 13"' = any(descendants)
-and channel in ('mobile', '__all__')
-and locale in ('de_DE', '__all__')
-;
+aka, only provide columns you are interested in, `whatever(oid)` will do the rest
 
 ```
+begin;
+set constraints all deferred;
+set local app.tenant to 't1';
 
+insert into pim.family select * from jsonb_populate_recordset(
+    null::pim.family,
+    to_jsonb(array[
+        whatever('pim.family'::regclass, jsonb_build_object(
+            'family', 'parent1'
+        )),
+        whatever('pim.family'::regclass, jsonb_build_object(
+            'parent', 'parent1'
+        ))
+    ])
+);
+commit
+```

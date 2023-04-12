@@ -33,7 +33,7 @@ insert into product_value (product, attribute, channel, locale, value) values
 ('p1', 'a1', '__all__', '__all__', to_jsonb(text 'v1')),
 ('p2', 'a2', '__all__', '__all__', to_jsonb(text 'v2'));
 
-assert count(_log(a, 'unexpected inherited value!')) = 0 from (
+assert count(a) = 0 from (
     with expected as (
         values
         ('p1', 'a1', to_jsonb(text 'v1')),
