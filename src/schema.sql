@@ -8,15 +8,12 @@ set local search_path to pim;
 
 create extension if not exists pg_trgm schema public;
 
-drop role if exists app;
-create role app;
+drop role if exists app; create role app;
+drop role if exists ivm; create role ivm;
 grant usage on schema pim to app;
+grant usage on schema pim to ivm;
 
 create domain netext as text constraint "non-empty text" check (trim(value) <> '');
-
-create table "user" (
-    
-);
 
 create table locale (
     tenant netext default current_setting('app.tenant', true),
@@ -276,65 +273,6 @@ referencing new table as new_product
 for each statement
 execute function maintain_product_descendants();
 
-create table family_stat (
-    tenant netext,
-    family text not null,
-    num_products bigint not null,
-    primary key (tenant, family),
-    foreign key (tenant, family) references family (tenant, family)
-        on update cascade
-        on delete cascade
-);
-
-grant select on table family_stat to app;
-
-alter table family_stat enable row level security;
-
-create policy family_stat_by_tenant
-on family_stat
-to app
-using (tenant = current_setting('app.tenant', true));
-
-create function maintain_family_stat()
-returns trigger
-language plpgsql 
-set search_path to pim, pg_catalog
-security definer
-as $$
-begin
-    with cs_stat as (
-        select tenant, family, count(product)
-        from change_set
-        group by 1, 2
-    )
-    insert into family_stat
-    select * from cs_stat
-    on conflict (tenant, family)
-    do update
-    set num_products = family_stat.num_products + (
-        case when TG_OP = 'INSERT'
-            then + excluded.num_products
-            else - excluded.num_products
-        end
-    );
-    return null;
-end
-$$;
-
-create trigger "002: maintain family_stat insert"
-after insert
-on product
-referencing new table as change_set
-for each statement
-execute function maintain_family_stat();
-
-create trigger "003: maintain family_stat delete"
-after delete
-on product
-referencing old table as change_set
-for each statement
-execute function maintain_family_stat();
-
 create recursive view product_ancestry (tenant, product, parent, family, level, ancestors)
 with (security_invoker)
 as select tenant, product, parent, family, 1, '{}'::text[]
@@ -465,7 +403,7 @@ create function denormarlize_attribute()
 returns trigger
 language plpgsql 
 set search_path to pim, pg_catalog
-security definer
+security invoker
 as $$
 begin
     select is_unique, type
@@ -486,14 +424,15 @@ returns trigger
 language plpgsql 
 set search_path to pim, pg_catalog
 parallel safe
-security definer
+security invoker
 as $$
+declare r record;
 begin
-    assert jsonb_agg(option) = case when new.type = 'select' then to_jsonb(array[new.value]) else new.value end
+    assert jsonb_agg(option) @> case when new.type = 'select' then to_jsonb(array[new.value]) else new.value end
         from select_option
         where new.value ? option
-        and new.attribute = attribute
-    , format('invalid option in %L for attribute %L', new.value, new.attribute);
+        and attribute = new.attribute
+    , format('invalid select_option in %L for attribute %L', new.value, new.attribute);
     return new;
 end
 $$;
@@ -528,97 +467,6 @@ where value.product = any(ancestors || p.product)
 ;
 
 grant select on table inherited_product_value to app;
-
-create table product_stat (
-    tenant netext,
-    product text not null,
-    channel text not null,
-    locale text not null,
-    filled bigint not null,
-    to_complete bigint not null,
-    total bigint not null,
-    percent_to_complete decimal(6,3) not null generated always as (((filled::float / greatest(1, to_complete))) * 100) stored,
-    percent_total decimal(6,3) not null generated always as (((filled::float / greatest(1, total))) * 100) stored,
-    primary key (tenant, product, channel, locale),
-    foreign key (tenant, product) references product (tenant, product)
-        on update cascade
-        on delete cascade,
-    foreign key (tenant, channel) references channel (tenant, channel)
-        on update cascade
-        on delete cascade,
-    foreign key (tenant, locale) references locale (tenant, locale)
-        on update cascade
-        on delete cascade
-);
-
-grant select on table product_stat to app;
-
-alter table product_stat enable row level security;
-
-create policy product_stat_by_tenant
-on product_stat
-to app
-using (tenant = current_setting('app.tenant', true));
-
-create function maintain_product_stat()
-returns trigger
-language plpgsql 
-set search_path to pim, pg_catalog
-security definer
-as $$
-begin
-    with family_stat (family, to_complete, total) as (
-        select family, count(*) filter (where to_complete), count(*)
-        from family_has_attribute
-        group by family
-    ),
-    cs_stat as (
-        select p.tenant, p.family, p.product,
-        coalesce(c.channel, case when value.channel = '__all__' then c.channel else value.channel end) channel,
-        coalesce(l.locale, case when value.locale = '__all__' then l.locale else value.locale end) locale,
-        count(value) filter (where value not in (jsonb '{}', to_jsonb(text ''))) filled
-        from product p
-        cross join locale l
-        cross join channel c
-        left join change_set value
-            on value.product = p.product
-            and case when value.channel = '__all__' then c.channel else value.channel end = c.channel
-            and case when value.locale = '__all__' then l.locale else value.locale end = l.locale
-        where c.channel <> '__all__'
-        and l.locale <> '__all__'
-        group by 1, 2, 3, 4, 5
-    )
-    insert into product_stat
-    select tenant, product, channel, locale, filled, to_complete, total
-    from cs_stat
-    join family_stat using (family)
-    on conflict (tenant, product, channel, locale)
-    do update
-    set filled = product_stat.filled + (
-        case when TG_OP in ('INSERT', 'UPDATE')
-            then + excluded.filled
-            else - excluded.filled
-        end
-    );
-    return null;
-end
-$$;
-
-create trigger "002: maintain product_stat insert"
-after insert on product_value
-referencing new table as change_set
-for each statement execute function maintain_product_stat();
-
-create trigger "003: maintain product_stat update"
-after update on product_value
-referencing new table as change_set
-for each statement execute function maintain_product_stat();
-
-create trigger "004: maintain product_stat delete"
-after delete on product_value
-referencing old table as change_set
-for each statement execute function maintain_product_stat();
-
 
 create view product_form (
     tenant,
@@ -703,5 +551,11 @@ and case when a.localizable
 ;
 
 grant select on table product_form to app;
+
+\i src/schema/family_stat.sql
+\i src/schema/product_stat.sql
+\i src/schema/role.sql
+
+grant select on all tables in schema pim to ivm;
 
 commit;

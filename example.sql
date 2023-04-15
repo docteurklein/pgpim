@@ -2,7 +2,7 @@
 \timing on
 
 begin;
--- set constraints all deferred;
+set constraints all deferred;
 
 set local search_path to pim;
 
@@ -12,15 +12,21 @@ insert into channel (channel) values ('__all__');
 
 set local role to app; -- rls compliant :)
 
-
 insert into channel (channel) values
     ('ecommerce'),
     ('mobile')
+;
+insert into channel (tenant, channel) values
+    ('tenant#2', 'print')
 ;
 insert into locale (locale, labels) values
     ('fr_FR', jsonb_build_object('en_US', 'French', 'fr_FR', 'Français')),
     ('de_DE', jsonb_build_object('en_US', 'German', 'de_DE', 'Deutsch')),
     ('en_US', '{}');
+
+insert into locale (tenant, locale) values
+    ('tenant#2', 'en_UK')
+;
 
 insert into attribute (attribute, type, is_unique, scopable, localizable) values
 ('description', 'text', false, true, true),
@@ -111,6 +117,26 @@ insert into product_value (product, attribute, channel, locale, language, value)
 
 insert into product_value (product, attribute, channel, locale, language, value) values
 ('eben 2023 garden table', 'essence', '__all__', '__all__', null, to_jsonb(text 'eben'))
+;
+
+insert into role (role, permissions) values
+    ('admin', '{}'),
+    ('editor', array['view', 'write']),
+    ('seo', array['meta', 'title']),
+    ('config', array['settings', 'timeouts'])
+;
+insert into role_inherits_role (role, inherited) values
+    ('admin', 'config'),
+    ('admin', 'editor'),
+    ('editor', 'seo')
+;
+insert into "user" ("user") values
+    ('alice'),
+    ('bob')
+;
+insert into "grant" ("user", role) values 
+    ('alice', 'admin'),
+    ('bob', 'seo')
 ;
 
 commit;
