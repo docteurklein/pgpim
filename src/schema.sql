@@ -9,7 +9,7 @@ set local search_path to pim;
 create extension if not exists pg_trgm schema public;
 
 drop role if exists app; create role app;
-drop role if exists ivm; create role ivm;
+drop role if exists ivm; create role ivm bypassrls;
 grant usage on schema pim to app;
 grant usage on schema pim to ivm;
 
@@ -154,7 +154,7 @@ create table family_has_attribute (
         on update cascade
         on delete cascade
 );
-grant select, insert, delete on table family_has_attribute to app;
+grant select, insert, delete, update (to_complete) on table family_has_attribute to app;
 alter table family_has_attribute enable row level security;
 
 create policy family_has_attribute_by_tenant
@@ -265,6 +265,8 @@ begin
     return null;
 end
 $$;
+alter function maintain_product_descendants owner to ivm;
+grant insert, update, delete on table product_descendant to ivm;
 
 create trigger "001: maintain product_descendants"
 after insert
@@ -341,14 +343,14 @@ create table product_value (
     tenant netext default current_setting('app.tenant', true),
     product text not null,
     attribute text not null,
-    locale text not null default '__all__',
-    channel text not null default '__all__',
+    locale text not null,
+    channel text not null,
     language text null,
     type netext,
     is_unique boolean not null,
     value jsonb not null,
     primary key (tenant, product, attribute, locale, channel), -- need __all__ instead of null
-    -- constraint "unique" unique nulls not distinct (tenant, product, attribute, locale, channel), -- cool, but no replica identity with NULL
+    -- constraint "unique" unique nulls not distinct (tenant, product, attribute, locale, channel), -- cool, but no replica identity with NULL, even if not distinct
     foreign key (tenant, channel) references channel (tenant, channel)
         on update cascade
         on delete cascade,
@@ -387,10 +389,22 @@ with check (exists(
     and fha.family = (select family from product where product = product_value.product)
 ));
 
-create policy "has channel/locale if attribute is scopable/localizable"
+create policy "insert valid channel/locale if attribute is scopable/localizable"
 on product_value
 as restrictive
 for insert
+to app
+with check (exists(
+    select from attribute a
+    where product_value.attribute = a.attribute 
+    and case when a.scopable then product_value.channel <> '__all__' else product_value.channel = '__all__' end
+    and case when a.localizable then product_value.locale <> '__all__' else product_value.locale = '__all__' end
+));
+
+create policy "update valid channel/locale if attribute is scopable/localizable"
+on product_value
+as restrictive
+for update
 to app
 with check (exists(
     select from attribute a
@@ -553,7 +567,7 @@ and case when a.localizable
 grant select on table product_form to app;
 
 \i src/schema/family_stat.sql
-\i src/schema/product_stat.sql
+\i src/schema/product_completeness.sql
 \i src/schema/role.sql
 
 grant select on all tables in schema pim to ivm;

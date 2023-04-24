@@ -17,11 +17,6 @@ on family_stat
 to app
 using (tenant = current_setting('app.tenant', true));
 
-create policy family_stat_ivm
-on family_stat
-to ivm
-using (true);
-
 create function maintain_family_stat()
 returns trigger
 language plpgsql 

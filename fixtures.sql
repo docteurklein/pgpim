@@ -2,6 +2,11 @@
 \timing on
 
 set search_path to pim;
+alter table product_descendant set unlogged;
+alter table product_in_category set unlogged;
+alter table product_value set unlogged;
+alter table product_completeness set unlogged;
+alter table product set unlogged;
 
 begin;
 
@@ -13,20 +18,20 @@ select array_to_string(
 , ' ') from words;
 $$ language sql volatile;
 
-create table sentence (
-    language text not null default 'english',
-    sentence text not null
-);
-\copy sentence(sentence) from 'sentences.txt' with (format text);
-
-alter table sentence alter language set default 'french';
-\copy sentence(sentence) from 'french.txt' with (format text);
-
-grant select on sentence to app;
-
-create or replace function sentence() returns text as $$
-    select sentence from sentence tablesample bernoulli(1) limit 1
-$$ language sql volatile;
+-- create table sentence (
+--     language text not null default 'english',
+--     sentence text not null
+-- );
+-- \copy sentence(sentence) from 'sentences.txt' with (format text);
+-- 
+-- alter table sentence alter language set default 'french';
+-- \copy sentence(sentence) from 'french.txt' with (format text);
+-- 
+-- grant select on sentence to app;
+-- 
+-- create or replace function sentence() returns text as $$
+--     select sentence from sentence tablesample bernoulli(1) limit 1
+-- $$ language sql volatile;
 
 set local role to app;
 -- select set_config('app.tenant', 'tenant#1', true);
@@ -37,7 +42,7 @@ insert into locale (locale) values ('fr_FR'), ('de_DE'), ('en_US');
 -- truncate family cascade;
 insert into family (family, parent)
 with recursive tree(family, parent, level) as (
-    select 'family#' || i, null, 1 from generate_series(1, 5) i
+    select 'family#' || i, null, 1 from generate_series(1, 20) i
     union all
     select format('%s.%s', tree.family, j), tree.family, level + 1
     from
@@ -50,11 +55,11 @@ select family, parent from tree;
 -- truncate attribute cascade;
 insert into attribute (attribute, type, scopable, localizable, is_unique)
 select 'attribute#' || i, 'text', true, true, i % 3 = 0
-from generate_series(1, 10) i;
+from generate_series(1, 20) i;
 
 insert into attribute (attribute, type, scopable, localizable, is_unique)
 select 'parent attribute#' || i, 'text', false, false, i % 3 = 0
-from generate_series(1, 5) i;
+from generate_series(1, 10) i;
 
 -- truncate family_has_attribute cascade;
 insert into family_has_attribute (family, attribute, to_complete)
@@ -75,7 +80,7 @@ begin;
 -- truncate product cascade;
 insert into product (product, parent, family)
 select format('product#%s', random()), null, family
-from generate_series(1, 50) i,
+from generate_series(1, 1000) i,
 family
 where family.parent is null;
 
@@ -91,7 +96,7 @@ begin;
 
 -- truncate product_value cascade;
 insert into product_value (product, attribute, locale, channel, language, value)
-select product, attribute, '__all__', '__all__', 'simple'::regconfig, to_jsonb('parent data: ' || coalesce(sentence() || random(), random()::text))
+select product, attribute, '__all__', '__all__', 'simple'::regconfig, to_jsonb('parent data: ' || random()::text)
 from product
 join family_has_attribute using (family)
 join family using (family)
@@ -105,7 +110,7 @@ commit;
 begin;
 
 insert into product_value (product, attribute, locale, channel, language, value)
-select product, attribute, locale, channel, 'simple'::regconfig, to_jsonb(coalesce(sentence() || random(), random()::text))
+select product, attribute, locale, channel, 'simple'::regconfig, to_jsonb(random()::text)
 from (values ('en_US'), ('de_DE')) locale (locale),
 (values ('ecommerce'), ('print')) channel (channel),
 product

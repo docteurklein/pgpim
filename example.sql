@@ -6,9 +6,9 @@ set constraints all deferred;
 
 set local search_path to pim;
 
-truncate product, channel, locale, attribute, family cascade;
-insert into locale (locale) values ('__all__');
-insert into channel (channel) values ('__all__');
+-- truncate product, channel, locale, attribute, family cascade;
+-- insert into locale (locale) values ('__all__');
+-- insert into channel (channel) values ('__all__');
 
 set local role to app; -- rls compliant :)
 
@@ -16,17 +16,10 @@ insert into channel (channel) values
     ('ecommerce'),
     ('mobile')
 ;
-insert into channel (tenant, channel) values
-    ('tenant#2', 'print')
-;
 insert into locale (locale, labels) values
     ('fr_FR', jsonb_build_object('en_US', 'French', 'fr_FR', 'Français')),
     ('de_DE', jsonb_build_object('en_US', 'German', 'de_DE', 'Deutsch')),
     ('en_US', '{}');
-
-insert into locale (tenant, locale) values
-    ('tenant#2', 'en_UK')
-;
 
 insert into attribute (attribute, type, is_unique, scopable, localizable) values
 ('description', 'text', false, true, true),
