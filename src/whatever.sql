@@ -17,7 +17,7 @@ with field(name, type) as (
 )
 select jsonb_object_agg(name, case type
     when 'int4' then to_jsonb(random() * 10)
-    when 'text' then to_jsonb(pim.lorem((random()*10)::int))
+    when 'text' then to_jsonb((random()*10)::text))
     else to_jsonb(type)
 end) || custom
 from field

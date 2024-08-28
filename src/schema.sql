@@ -3,15 +3,19 @@
 begin;
 
 drop schema if exists pim cascade;
+drop role if exists app;
+drop role if exists ivm;
+
+create role app;
+create role ivm bypassrls;
+
 create schema pim;
-set local search_path to pim;
-
-create extension if not exists pg_trgm schema public;
-
-drop role if exists app; create role app;
-drop role if exists ivm; create role ivm bypassrls;
 grant usage on schema pim to app;
 grant usage on schema pim to ivm;
+
+set local search_path to pim, pg_catalog;
+
+-- create extension if not exists pg_trgm schema public;
 
 create domain netext as text constraint "non-empty text" check (trim(value) <> '');
 
@@ -57,7 +61,7 @@ create table family (
     labels jsonb not null default '{}',
     parent text null,
     primary key (tenant, family),
-    foreign key (tenant, parent) references family (tenant, family)
+    constraint "family's parent" foreign key (tenant, parent) references family (tenant, family)
         on update cascade
         on delete cascade deferrable
 );
@@ -100,7 +104,7 @@ create table category (
     labels jsonb not null default '{}',
     parent text null,
     primary key (tenant, category),
-    foreign key (tenant, parent) references category (tenant, category)
+    constraint "category's parent" foreign key (tenant, parent) references category (tenant, category)
         on update cascade
         on delete cascade deferrable
 );
@@ -138,7 +142,9 @@ grant select, insert, delete, update (attribute, labels) on table attribute to a
 alter table attribute enable row level security;
 
 create policy attribute_by_tenant
-on attribute for all to app
+on attribute
+for all
+to app
 using (tenant = current_setting('app.tenant', true));
 
 create table family_has_attribute (
@@ -147,10 +153,10 @@ create table family_has_attribute (
     attribute text not null,
     to_complete boolean not null,
     primary key (tenant, family, attribute),
-    foreign key (tenant, family) references family (tenant, family)
+    constraint "family_has_attribute's family" foreign key (tenant, family) references family (tenant, family)
         on update cascade
         on delete cascade,
-    foreign key (tenant, attribute) references attribute (tenant, attribute)
+    constraint "family_has_attribute's attribute" foreign key (tenant, attribute) references attribute (tenant, attribute)
         on update cascade
         on delete cascade
 );
@@ -187,10 +193,10 @@ create table product (
     parent text null,
     family text not null,
     primary key (tenant, product),
-    foreign key (tenant, family) references family (tenant, family)
+    constraint "product's family" foreign key (tenant, family) references family (tenant, family)
         on update cascade
         on delete cascade,
-    foreign key (tenant, parent) references product (tenant, product)
+    constraint "product's parent" foreign key (tenant, parent) references product (tenant, product)
         on update cascade
         on delete cascade deferrable
 );
@@ -225,10 +231,10 @@ create table product_descendant (
     product text not null,
     descendant text not null,
     primary key (tenant, product, descendant),
-    foreign key (tenant, product) references product (tenant, product)
+    constraint "product_descendant's product" foreign key (tenant, product) references product (tenant, product)
         on update cascade
         on delete cascade,
-    foreign key (tenant, descendant) references product (tenant, product)
+    constraint "product_descendant's descendant" foreign key (tenant, descendant) references product (tenant, product)
         on update cascade
         on delete cascade
 );
@@ -245,6 +251,7 @@ using (tenant = current_setting('app.tenant', true));
 create function maintain_product_descendants()
 returns trigger
 language plpgsql 
+volatile leakproof strict
 set search_path to pim, pg_catalog
 security definer
 as $$
@@ -292,10 +299,10 @@ create table product_in_category (
     product text not null,
     category text not null,
     primary key (tenant, product, category),
-    foreign key (tenant, product) references product (tenant, product)
+    constraint "product_in_category's product" foreign key (tenant, product) references product (tenant, product)
         on update cascade
         on delete cascade,
-    foreign key (tenant, category) references category (tenant, category)
+    constraint "product_in_category's category" foreign key (tenant, category) references category (tenant, category)
         on update cascade
         on delete cascade
 );
@@ -314,7 +321,7 @@ create table select_option (
     option netext,
     labels jsonb not null default '{}',
     primary key (tenant, attribute, option),
-    foreign key (tenant, attribute) references attribute (tenant, attribute)
+    constraint "select_option's attribute" foreign key (tenant, attribute) references attribute (tenant, attribute)
         on update cascade
         on delete cascade
 );
@@ -351,16 +358,16 @@ create table product_value (
     value jsonb not null,
     primary key (tenant, product, attribute, locale, channel), -- need __all__ instead of null
     -- constraint "unique" unique nulls not distinct (tenant, product, attribute, locale, channel), -- cool, but no replica identity with NULL, even if not distinct
-    foreign key (tenant, channel) references channel (tenant, channel)
+    constraint "product_value's channel" foreign key (tenant, channel) references channel (tenant, channel)
         on update cascade
         on delete cascade,
-    foreign key (tenant, locale) references locale (tenant, locale)
+    constraint "product_value's locale" foreign key (tenant, locale) references locale (tenant, locale)
         on update cascade
         on delete cascade,
-    foreign key (tenant, product) references product (tenant, product)
+    constraint "product_value's product" foreign key (tenant, product) references product (tenant, product)
         on update cascade
         on delete cascade,
-    foreign key (tenant, attribute) references attribute (tenant, attribute)
+    constraint "product_value's attribute" foreign key (tenant, attribute) references attribute (tenant, attribute)
         on update cascade
         on delete cascade
 );
@@ -389,7 +396,7 @@ with check (exists(
     and fha.family = (select family from product where product = product_value.product)
 ));
 
-create policy "insert valid channel/locale if attribute is scopable/localizable"
+create policy "insert channel/locale only if attribute allows it"
 on product_value
 as restrictive
 for insert
@@ -401,7 +408,7 @@ with check (exists(
     and case when a.localizable then product_value.locale <> '__all__' else product_value.locale = '__all__' end
 ));
 
-create policy "update valid channel/locale if attribute is scopable/localizable"
+create policy "update channel/locale only if attribute allows it"
 on product_value
 as restrictive
 for update
@@ -463,7 +470,7 @@ create unique index unique_attribute on product_value (tenant, attribute, locale
 where is_unique;
 
 create function ts_lang(text) returns regconfig
-immutable strict
+immutable strict leakproof
 begin atomic;
 select coalesce((select cfgname::regconfig from pg_ts_config where cfgname = $1), 'simple')::regconfig;
 end;
@@ -487,7 +494,6 @@ create view product_form (
     product,
     via,
     attribute,
-    type,
     channel,
     locale,
     is_unique,
@@ -500,8 +506,17 @@ as select
     p.tenant,
     coalesce(pd.descendant, p.product),
     p.product,
-    fha.attribute,
-    a.type,
+    jsonb_build_object(
+        'value', fha.attribute,
+        'in', jsonb_build_object(
+            'sql', format($sql$
+                select attribute from family_has_attribute
+                where attribute ilike concat('%%', $1, '%%')
+                and family = %L
+            $sql$, fha.family),
+            'args', array['attribute']
+        )
+    ),
     jsonb_build_object(
         'value', c.channel,
         'in', case when a.localizable then 'select channel from channel' end
@@ -566,9 +581,9 @@ and case when a.localizable
 
 grant select on table product_form to app;
 
-\i src/schema/family_stat.sql
-\i src/schema/product_completeness.sql
-\i src/schema/role.sql
+-- \i src/schema/family_stat.sql
+-- \i src/schema/product_completeness.sql
+-- \i src/schema/role.sql
 
 grant select on all tables in schema pim to ivm;
 

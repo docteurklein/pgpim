@@ -5,7 +5,7 @@ set search_path to pim;
 alter table product_descendant set unlogged;
 alter table product_in_category set unlogged;
 alter table product_value set unlogged;
-alter table product_completeness set unlogged;
+alter table if exists product_completeness set unlogged;
 alter table product set unlogged;
 
 begin;

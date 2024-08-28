@@ -1,0 +1,12 @@
+diff --git a/Makefile b/Makefile
+index 525a2df..fba2b07 100644
+--- a/Makefile
++++ b/Makefile
+@@ -74,7 +74,6 @@ duckdb: third_party/duckdb/Makefile $(FULL_DUCKDB_LIB)
+ 
+ 
+ third_party/duckdb/Makefile:
+-	git submodule update --init --recursive
+ 
+ $(FULL_DUCKDB_LIB):
+ 	$(MAKE) -C third_party/duckdb \

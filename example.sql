@@ -67,8 +67,10 @@ insert into family_has_attribute (family, attribute, to_complete) values
 insert into product (product, parent, family) values
 ('adidas', null, 'shoe'),
 ('nike air max', null, 'shoe');
+
 insert into product (product, parent, family) values -- can't do in one insert because RLS (parent needs to be inserted first)
     ('nike air max red', 'nike air max', 'shoe by color');
+
 insert into product (product, parent, family) values
         ('nike air max red 13', 'nike air max red', 'shoe by size'),
         ('nike air max red 14', 'nike air max red', 'shoe by size'),
@@ -112,25 +114,25 @@ insert into product_value (product, attribute, channel, locale, language, value)
 ('eben 2023 garden table', 'essence', '__all__', '__all__', null, to_jsonb(text 'eben'))
 ;
 
-insert into role (role, permissions) values
-    ('admin', '{}'),
-    ('editor', array['view', 'write']),
-    ('seo', array['meta', 'title']),
-    ('config', array['settings', 'timeouts'])
-;
-insert into role_inherits_role (role, inherited) values
-    ('admin', 'config'),
-    ('admin', 'editor'),
-    ('editor', 'seo')
-;
-insert into "user" ("user") values
-    ('alice'),
-    ('bob')
-;
-insert into "grant" ("user", role) values 
-    ('alice', 'admin'),
-    ('bob', 'seo')
-;
+-- insert into role (role, permissions) values
+--     ('admin', '{}'),
+--     ('editor', array['view', 'write']),
+--     ('seo', array['meta', 'title']),
+--     ('config', array['settings', 'timeouts'])
+-- ;
+-- insert into role_inherits_role (role, inherited) values
+--     ('admin', 'config'),
+--     ('admin', 'editor'),
+--     ('editor', 'seo')
+-- ;
+-- insert into "user" ("user") values
+--     ('alice'),
+--     ('bob')
+-- ;
+-- insert into "grant" ("user", role) values 
+--     ('alice', 'admin'),
+--     ('bob', 'seo')
+-- ;
 
 commit;
 vacuum analyze;
